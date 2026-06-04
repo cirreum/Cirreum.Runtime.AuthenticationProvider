@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<RootNamespace>Cirreum.Runtime</RootNamespace>
+		<Description>Runtime driver for the Cirreum Authentication track. Provides the typed RegisterAuthenticationProvider&lt;TRegistrar, TSettings, TInstanceSettings&gt;() bootstrap that the umbrella package Cirreum.Runtime.Authentication calls once per framework-shipped scheme registrar, plus the framework-shipped AudienceProviderRoleClaimsTransformer and its diagnostics (ActivitySource + Meter).</Description>
+		<PackageTags>cirreum;runtime;authentication;provider</PackageTags>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<!--
+			ProjectReference to Cirreum.AuthenticationProvider. Cirreum.Kernel,
+			Cirreum.Common, and Cirreum.Providers flow in transitively.
+		-->
+		<ProjectReference Include="..\..\..\..\Core\Cirreum.AuthenticationProvider\src\Cirreum.AuthenticationProvider\Cirreum.AuthenticationProvider.csproj" />
+
+		<!-- Deferred-logger surface used by the typed RegisterAuthenticationProvider extension. -->
+		<PackageReference Include="Cirreum.Logging.Deferred" Version="1.0.113" />
+
+		<FrameworkReference Include="Microsoft.AspNetCore.App" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<Using Include="Cirreum.AuthenticationProvider" />
+	</ItemGroup>
+
+</Project>
