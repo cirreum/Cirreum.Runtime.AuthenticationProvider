@@ -8,10 +8,10 @@
 
 	<ItemGroup>
 		<!--
-			ProjectReference to Cirreum.AuthenticationProvider. Cirreum.Kernel,
-			Cirreum.Common, and Cirreum.Providers flow in transitively.
+			PackageReference to Cirreum.AuthenticationProvider (local feed during the auth-track
+			cutover). Cirreum.Kernel, Cirreum.Contracts, and Cirreum.Providers flow in transitively.
 		-->
-		<ProjectReference Include="..\..\..\..\Core\Cirreum.AuthenticationProvider\src\Cirreum.AuthenticationProvider\Cirreum.AuthenticationProvider.csproj" />
+		<PackageReference Include="Cirreum.AuthenticationProvider" Version="1.1.0" />
 
 		<!-- Deferred-logger surface used by the typed RegisterAuthenticationProvider extension. -->
 		<PackageReference Include="Cirreum.Logging.Deferred" Version="1.0.113" />
