@@ -99,7 +99,7 @@ public static class HostApplicationBuilderExtensions {
 
 			// Call Register even when Instances is empty — the registrar may stash
 			// provider-level state (e.g. BearerPrefix for the ApiKey track) that
-			// downstream extension methods (e.g. AddDynamicApiKeys&lt;T&gt;) read at
+			// downstream composition (e.g. AddNamedSource&lt;T&gt; / AddDefaultSource&lt;T&gt;) reads at
 			// composition time. The registrar's implementation is responsible for
 			// handling the empty-Instances case appropriately.
 			registrar.Register(
