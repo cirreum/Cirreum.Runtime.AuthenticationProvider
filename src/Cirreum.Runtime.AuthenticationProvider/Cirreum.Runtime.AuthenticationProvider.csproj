@@ -11,10 +11,10 @@
 			PackageReference to Cirreum.AuthenticationProvider (local feed during the auth-track
 			cutover). Cirreum.Kernel, Cirreum.Contracts, and Cirreum.Providers flow in transitively.
 		-->
-		<PackageReference Include="Cirreum.AuthenticationProvider" Version="1.1.0" />
+		<PackageReference Include="Cirreum.AuthenticationProvider" Version="1.1.1" />
 
 		<!-- Deferred-logger surface used by the typed RegisterAuthenticationProvider extension. -->
-		<PackageReference Include="Cirreum.Logging.Deferred" Version="1.0.114" />
+		<PackageReference Include="Cirreum.Logging.Deferred" Version="1.0.115" />
 
 		<FrameworkReference Include="Microsoft.AspNetCore.App" />
 	</ItemGroup>
