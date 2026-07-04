@@ -50,7 +50,7 @@ Connection-state promotion helper for long-lived connections (SignalR / WebSocke
 
 ## Dependencies
 
-- **Cirreum.AuthenticationProvider** — Authentication track contracts and registrar base (`Cirreum.Kernel`, `Cirreum.Common`, `Cirreum.Providers` flow in transitively)
+- **Cirreum.AuthenticationProvider** — Authentication track contracts and registrar base (`Cirreum.Kernel`, `Cirreum.Contracts`, `Cirreum.Providers` flow in transitively)
 - **Microsoft.AspNetCore.App** — ASP.NET authentication primitives
 
 ## Versioning

@@ -7,10 +7,7 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<!--
-			PackageReference to Cirreum.AuthenticationProvider (local feed during the auth-track
-			cutover). Cirreum.Kernel, Cirreum.Contracts, and Cirreum.Providers flow in transitively.
-		-->
+		<!-- Cirreum.Kernel, Cirreum.Contracts, and Cirreum.Providers flow in transitively. -->
 		<PackageReference Include="Cirreum.AuthenticationProvider" Version="1.1.2" />
 
 		<!-- Deferred-logger surface used by the typed RegisterAuthenticationProvider extension. -->
