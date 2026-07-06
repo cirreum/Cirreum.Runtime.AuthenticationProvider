@@ -10,6 +10,7 @@
   </Folder>
   <Folder Name="/docs/">
     <File Path="docs/CHANGELOG.md" />
+    <File Path="docs/RELEASE-NOTES-v1.1.0.md" />
   </Folder>
   <Folder Name="/src/">
     <File Path="src/Directory.Build.props" />
