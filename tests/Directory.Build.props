@@ -1,0 +1,10 @@
+<Project>
+
+	<Import Project="..\src\Directory.Build.props" />
+
+	<PropertyGroup Label="Test Overrides">
+		<IsPackable>false</IsPackable>
+		<GenerateDocumentationFile>false</GenerateDocumentationFile>
+	</PropertyGroup>
+
+</Project>

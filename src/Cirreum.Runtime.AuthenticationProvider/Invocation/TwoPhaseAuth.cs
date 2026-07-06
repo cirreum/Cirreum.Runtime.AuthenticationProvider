@@ -1,13 +1,14 @@
-namespace Cirreum.Authentication;
+namespace Cirreum.Invocation.Connections;
 
 using System.Security.Claims;
-using Cirreum.Invocation.Connections;
+using Cirreum.Authentication;
 
 /// <summary>
-/// Spine-shipped helper for the Two-Phase Auth pattern —
+/// Spine-shipped write surface for the Two-Phase Auth pattern —
 /// promotes a long-lived connection that started anonymous-pending-auth into an
-/// authenticated state mid-flight by stamping a <see cref="ClaimsPrincipal"/> into the
-/// connection's <see cref="IInvocationConnection.Items"/> under
+/// authenticated state mid-flight via <c>connection.Promote(principal)</c>, stamping the
+/// <see cref="ClaimsPrincipal"/> into the connection's
+/// <see cref="IInvocationConnection.Items"/> under
 /// <see cref="AuthenticationContextKeys.PromotedPrincipal"/>.
 /// </summary>
 /// <remarks>
@@ -18,64 +19,74 @@ using Cirreum.Invocation.Connections;
 /// handoffs (the partner exchanges a one-time code for an authenticated principal).
 /// </para>
 /// <para>
-/// After <see cref="Promote"/>, the per-invocation <c>UserStateAccessor</c> reads the
-/// promoted principal in preference to the connection's original (anonymous) principal,
-/// so subsequent invocations on the connection flow with the upgraded identity.
+/// The read surface lives on <c>Cirreum.Contracts</c> as extension members of
+/// <see cref="IInvocationConnection"/>: <c>PromotedUser</c> (the nullable primitive),
+/// <c>EffectiveUser</c> (promoted-or-upgrade-time), and <c>IsUserPromoted</c>. After
+/// <c>Promote</c>, the framework's per-invocation contexts snapshot
+/// <c>connection.EffectiveUser</c> at construction, so the promoted identity flows into
+/// every <em>subsequent</em> invocation on the connection; an invocation already in
+/// flight keeps the principal it was constructed with.
 /// </para>
 /// <para>
-/// The framework's connection-terminator handler honors promotion when
-/// resolving subjects — a connection whose <c>PromotedPrincipal</c> claim subject
-/// matches an incoming <c>SessionTerminationRequested</c> or
-/// <c>CredentialRevoked</c> event is aborted as expected.
+/// The framework's connection-terminator handler (in <c>Cirreum.Services.Server</c>)
+/// honors promotion when resolving subjects — a connection whose effective principal
+/// matches an incoming <c>CredentialRevoked</c>, <c>UserAccountDisabled</c>, or
+/// <c>SessionTerminationRequested</c> event is aborted as expected.
 /// </para>
 /// </remarks>
 public static class TwoPhaseAuth {
 
-	/// <summary>
-	/// Promotes the connection by stamping the authenticated principal into
-	/// <see cref="IInvocationConnection.Items"/>. Replaces any prior promoted principal
-	/// (re-promotion is supported — apps that re-authenticate mid-connection overwrite
-	/// the prior promoted state).
-	/// </summary>
-	/// <param name="connection">The connection to promote. Must not be
-	/// <see langword="null"/>.</param>
-	/// <param name="principal">The authenticated <see cref="ClaimsPrincipal"/> to bind.
-	/// Must carry a valid identity (<see cref="ClaimsPrincipal.Identity"/>.IsAuthenticated
-	/// is <see langword="true"/>). Throws on anonymous principals — use the connection's
-	/// existing <see cref="IInvocationConnection.User"/> for unauthenticated state.</param>
-	/// <exception cref="ArgumentNullException">When <paramref name="connection"/> or
-	/// <paramref name="principal"/> is <see langword="null"/>.</exception>
-	/// <exception cref="ArgumentException">When <paramref name="principal"/> is
-	/// unauthenticated.</exception>
-	public static void Promote(IInvocationConnection connection, ClaimsPrincipal principal) {
-		ArgumentNullException.ThrowIfNull(connection);
-		ArgumentNullException.ThrowIfNull(principal);
-		if (principal.Identity?.IsAuthenticated != true) {
-			throw new ArgumentException(
-				"TwoPhaseAuth.Promote requires an authenticated principal. " +
-				"Anonymous principals cannot promote a connection.",
-				nameof(principal));
+	extension(IInvocationConnection connection) {
+
+		/// <summary>
+		/// Promotes the connection by stamping the authenticated principal into
+		/// <see cref="IInvocationConnection.Items"/>. Replaces any prior promoted principal
+		/// (re-promotion is supported — apps that re-authenticate mid-connection overwrite
+		/// the prior promoted state).
+		/// </summary>
+		/// <remarks>
+		/// <para>
+		/// Also evicts any cached application user
+		/// (<see cref="AuthenticationContextKeys.ApplicationUserCache"/>) from the
+		/// connection — it was resolved for the pre-promotion identity. The eviction
+		/// happens <em>before</em> the promoted principal is stamped: an invocation
+		/// constructed concurrently may observe the old principal with the old (matching)
+		/// cache, or either value briefly absent, but never the promoted principal paired
+		/// with the previous identity's application user. The lazy resolve path repopulates
+		/// the slot for the promoted identity on the next invocation.
+		/// </para>
+		/// <para>
+		/// <see cref="AuthenticationContextKeys.AuthenticatedScheme"/> deliberately
+		/// survives promotion — it describes how the <em>connection</em> (transport) was
+		/// authenticated, not the current occupant.
+		/// </para>
+		/// </remarks>
+		/// <param name="principal">The authenticated <see cref="ClaimsPrincipal"/> to bind.
+		/// Must carry a valid identity (<see cref="ClaimsPrincipal.Identity"/>.IsAuthenticated
+		/// is <see langword="true"/>). Throws on anonymous principals — use the connection's
+		/// existing <see cref="IInvocationConnection.User"/> for unauthenticated state.</param>
+		/// <exception cref="ArgumentNullException">When the connection or
+		/// <paramref name="principal"/> is <see langword="null"/>.</exception>
+		/// <exception cref="ArgumentException">When <paramref name="principal"/> is
+		/// unauthenticated.</exception>
+		public void Promote(ClaimsPrincipal principal) {
+			ArgumentNullException.ThrowIfNull(connection);
+			ArgumentNullException.ThrowIfNull(principal);
+			if (principal.Identity?.IsAuthenticated != true) {
+				throw new ArgumentException(
+					"Promote requires an authenticated principal. " +
+					"Anonymous principals cannot promote a connection.",
+					nameof(principal));
+			}
+
+			// Evict BEFORE stamping — order matters. A concurrently-constructed invocation
+			// seeds its auth slots from Connection.Items; evict-then-stamp means it can see
+			// old-principal + old-cache, old-principal + no-cache, or new-principal +
+			// no-cache, but never new-principal + the previous identity's cached user.
+			connection.Items.Remove(AuthenticationContextKeys.ApplicationUserCache);
+			connection.Items[AuthenticationContextKeys.PromotedPrincipal] = principal;
 		}
-		connection.Items[AuthenticationContextKeys.PromotedPrincipal] = principal;
-	}
 
-	/// <summary>
-	/// Returns the currently-promoted principal, or <see langword="null"/> when the
-	/// connection has not been promoted (still in anonymous-pending-auth state).
-	/// </summary>
-	public static ClaimsPrincipal? GetPromotedPrincipal(IInvocationConnection connection) {
-		ArgumentNullException.ThrowIfNull(connection);
-		return connection.Items.TryGetValue(AuthenticationContextKeys.PromotedPrincipal, out var v)
-			&& v is ClaimsPrincipal p
-				? p
-				: null;
 	}
-
-	/// <summary>
-	/// Returns <see langword="true"/> when the connection has been promoted via
-	/// <see cref="Promote"/>; <see langword="false"/> when still anonymous-pending-auth.
-	/// </summary>
-	public static bool IsPromoted(IInvocationConnection connection) =>
-		GetPromotedPrincipal(connection) is not null;
 
 }

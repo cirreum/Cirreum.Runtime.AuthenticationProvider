@@ -40,9 +40,15 @@ The single bootstrap entry point, invoked by the umbrella package (`AddAuthentic
 
 The framework-shipped `IClaimsTransformation` that runs after ASP.NET authentication completes. It reads the resolved scheme for the request and dispatches to the per-scheme `IApplicationUserResolver` the app registered, producing the Cirreum `IApplicationUser` and its role claims. Wired by the umbrella; one registration covers every scheme.
 
-### `TwoPhaseAuth`
+### `TwoPhaseAuth` — `connection.Promote(principal)`
 
-Connection-state promotion helper for long-lived connections (SignalR / WebSocket). Lets a connection that established with an anonymous sentinel principal be promoted to a fully authenticated principal mid-connection (e.g. after an in-band handshake), without tearing down and re-establishing.
+Connection-state promotion for long-lived connections (SignalR / WebSocket). Lets a connection that established with an anonymous sentinel principal be promoted to a fully authenticated principal mid-connection (e.g. after an in-band handshake), without tearing down and re-establishing:
+
+```csharp
+connection.Promote(authenticatedPrincipal);
+```
+
+`Promote` requires an authenticated principal, supports re-promotion (the newest principal wins), and evicts the connection's cached application user before stamping — so an invocation constructed mid-promotion can never pair the promoted principal with the previous identity's cached user. Read the promoted state through the `Cirreum.Contracts` connection surface: `connection.PromotedUser`, `connection.EffectiveUser`, and `connection.IsUserPromoted`.
 
 ### Diagnostics
 
