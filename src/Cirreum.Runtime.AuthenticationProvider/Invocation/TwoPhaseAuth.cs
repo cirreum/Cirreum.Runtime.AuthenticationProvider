@@ -1,7 +1,7 @@
 namespace Cirreum.Invocation.Connections;
 
-using System.Security.Claims;
 using Cirreum.Authentication;
+using System.Security.Claims;
 
 /// <summary>
 /// Spine-shipped write surface for the Two-Phase Auth pattern —
@@ -83,7 +83,14 @@ public static class TwoPhaseAuth {
 			// seeds its auth slots from Connection.Items; evict-then-stamp means it can see
 			// old-principal + old-cache, old-principal + no-cache, or new-principal +
 			// no-cache, but never new-principal + the previous identity's cached user.
+			// See Services.Server: UserStateAccessor where its re-hydrated on demand.
 			connection.Items.Remove(AuthenticationContextKeys.ApplicationUserCache);
+
+			// Stamp the promoted principal into the connection's items bag. The framework
+			// connection-terminator handler (in Cirreum.Services.Server) honors promotion when
+			// resolving subjects — a connection whose effective principal matches an
+			// incoming CredentialRevoked, UserAccountDisabled, or SessionTerminationRequested
+			// event is aborted as expected.
 			connection.Items[AuthenticationContextKeys.PromotedPrincipal] = principal;
 		}
 

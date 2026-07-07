@@ -92,7 +92,7 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 
 		// Per-scheme dispatch over IApplicationUserResolver. Falls back to the
 		// resolver whose Scheme is null when no per-scheme resolver matches.
-		var resolver = SelectResolver(scheme);
+		var resolver = this.SelectResolver(scheme);
 		var resolverType = resolver?.GetType().Name;
 		activity?.SetTag("auth.resolver.type", resolverType);
 
@@ -151,7 +151,8 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 			}
 
 			if (logger.IsEnabled(LogLevel.Debug)) {
-				Log.RolesResolvedDetail(logger, string.Join(", ", roles), userId);
+				var rolesList = string.Join(", ", roles);
+				Log.RolesResolvedDetail(logger, rolesList, userId);
 			}
 
 			activity?.SetTag("auth.transform.outcome", "RolesResolved");
@@ -167,12 +168,12 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 	}
 
 	private IApplicationUserResolver? SelectResolver(string? scheme) {
-		if (_resolvers.Length == 0) {
+		if (this._resolvers.Length == 0) {
 			return null;
 		}
 
 		if (!string.IsNullOrEmpty(scheme)) {
-			foreach (var r in _resolvers) {
+			foreach (var r in this._resolvers) {
 				if (string.Equals(r.Scheme, scheme, StringComparison.Ordinal)) {
 					return r;
 				}
@@ -180,7 +181,7 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 		}
 
 		// Fall back to the null-scheme (default) resolver.
-		foreach (var r in _resolvers) {
+		foreach (var r in this._resolvers) {
 			if (r.Scheme is null) {
 				return r;
 			}

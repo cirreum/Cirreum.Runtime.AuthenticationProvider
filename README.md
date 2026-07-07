@@ -16,7 +16,7 @@ Apps do **not** reference this package directly — they install the umbrella `C
 
 ## API
 
-### `RegisterAuthenticationProvider<TRegistrar, TSettings, TInstanceSettings>()`
+#### `RegisterAuthenticationProvider<TRegistrar, TSettings, TInstanceSettings>()`
 
 ```csharp
 using Microsoft.Extensions.Hosting;
@@ -36,11 +36,11 @@ The single bootstrap entry point, invoked by the umbrella package (`AddAuthentic
 3. Skips with a debug log when the section is missing — so only configured providers activate.
 4. Runs the registrar against the ASP.NET `AuthenticationBuilder`, registering one scheme per configured instance.
 
-### `AudienceProviderRoleClaimsTransformer` / `services.AddAudienceRoleClaimsTransformation()`
+#### `AudienceProviderRoleClaimsTransformer` / `services.AddAudienceRoleClaimsTransformation()`
 
 The framework-shipped `IClaimsTransformation` that runs after ASP.NET authentication completes. It reads the resolved scheme for the request and dispatches to the per-scheme `IApplicationUserResolver` the app registered, producing the Cirreum `IApplicationUser` and its role claims. Wired by the umbrella; one registration covers every scheme.
 
-### `TwoPhaseAuth` — `connection.Promote(principal)`
+#### `TwoPhaseAuth` — `connection.Promote(principal)`
 
 Connection-state promotion for long-lived connections (SignalR / WebSocket). Lets a connection that established with an anonymous sentinel principal be promoted to a fully authenticated principal mid-connection (e.g. after an in-band handshake), without tearing down and re-establishing:
 
@@ -50,7 +50,7 @@ connection.Promote(authenticatedPrincipal);
 
 `Promote` requires an authenticated principal, supports re-promotion (the newest principal wins), and evicts the connection's cached application user before stamping — so an invocation constructed mid-promotion can never pair the promoted principal with the previous identity's cached user. Read the promoted state through the `Cirreum.Contracts` connection surface: `connection.PromotedUser`, `connection.EffectiveUser`, and `connection.IsUserPromoted`.
 
-### Diagnostics
+#### Diagnostics
 
 `AuthenticationProviderDiagnostics` exposes the Authentication runtime's `ActivitySource` and `Meter` for tracing and metrics.
 
