@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-06
+
 ### Added
 
 - `connection.Promote(principal)` — Two-Phase Auth promotion is now an extension member on `IInvocationConnection` (C# 14 extension member on the `TwoPhaseAuth` class), completing the connection-ownership surface whose read side (`PromotedUser` / `EffectiveUser` / `IsUserPromoted`) ships in `Cirreum.Contracts`. Keeps the authenticated-principal validation.
