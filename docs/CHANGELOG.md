@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-updated nuget packages as a part of the lower layer changes.
+### Updated
+
+- Updated NuGet packages as part of the lower-layer changes.
 
 ## [1.1.0] - 2026-07-06
 
