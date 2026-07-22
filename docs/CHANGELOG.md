@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `AudienceProviderRoleClaimsTransformer` now dispatches the per-scheme
+  `IApplicationUserResolver` lookup on the request's stamped
+  `AuthenticationContextKeys.AuthenticatedScheme` slot, as its contract documents —
+  previously it dispatched on `ClaimsIdentity.AuthenticationType`, which for JWT
+  identities is the token handler's fixed `"AuthenticationTypes.Federation"` label
+  rather than a scheme name, so scheme-keyed resolvers never matched JWT-authenticated
+  requests: application-store roles were never added (role-gated policies returned 403)
+  and no application user was cached. The defensive slot seeding for explicitly-wired
+  routes that bypass the forward selector is unchanged. First regression tests for the
+  transformer added alongside (fixes
+  [#1](https://github.com/cirreum/Cirreum.Runtime.AuthenticationProvider/issues/1)).
+
 ## [1.1.3] - 2026-07-20
 
 ### Updated

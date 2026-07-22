@@ -87,7 +87,11 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 		// forward selector's value when both run.
 		context.Items.TryAdd(AuthenticationContextKeys.AuthenticatedScheme, identity.AuthenticationType);
 
-		var scheme = identity.AuthenticationType;
+		// Dispatch on the slot, not on AuthenticationType: JWT identities carry the token
+		// handler's fixed "AuthenticationTypes.Federation" label rather than a scheme name,
+		// so only the forward selector's stamp identifies which scheme authenticated.
+		var scheme = context.Items[AuthenticationContextKeys.AuthenticatedScheme] as string
+			?? identity.AuthenticationType;
 		activity?.SetTag("auth.scheme", scheme);
 
 		// Per-scheme dispatch over IApplicationUserResolver. Falls back to the
