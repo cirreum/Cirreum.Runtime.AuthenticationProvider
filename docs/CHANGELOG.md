@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`auth_transformations_total` → `cirreum.authn.transformations`.** The instrument was the only
+  one in the framework using underscores as segment separators; everything else is dot-separated
+  (`cirreum.authz.decisions`, `conductor.operations.total`). Underscores now separate words
+  *within* a segment only, matching OpenTelemetry conventions. The `_total` suffix is dropped as
+  well — that is a Prometheus exposition detail an exporter appends, not part of an instrument
+  name. The name is now the public constant `AuthenticationProviderDiagnostics.TransformationsMetric`.
+
+### Removed
+
+- **`AuthenticationProviderDiagnostics.DiagnosticName`.** It restated the literal
+  `"Cirreum.Authentication"` — the same value as `CirreumTelemetry.ActivitySources.Authentication`
+  and `.Meters.Authentication`. Those constants are the registration half of a cross-package
+  contract: Kernel's `AddCirreum()` subscribes exactly those names, and a source or meter whose name
+  is never registered is silently inert. A second copy of the literal could drift from the
+  registered one with nothing failing to say so.
+
+  Its documentation also claimed the constant was "referenced by the umbrella package to subscribe
+  to telemetry" — nothing referenced it, in this package or any other.
+
+  The `ActivitySource` and `Meter` now take their names from `CirreumTelemetry` directly, using the
+  source constant for the source and the meter constant for the meter. Those are equal today;
+  nothing guarantees they stay equal, and the single alias was quietly conflating them. See
+  `MIGRATION-v2.md`.
+
+### Fixed
+
+- The `ActivitySource` and `Meter` are created with `CirreumTelemetry.Version`. Without a version a
+  backend has no way to attribute spans or metrics to a release of the instrumenting library, and
+  every other telemetry class in the framework already passed it. Closes one of the three
+  unversioned sources identified in the 2026-07-04 framework-wide tracing review.
+
 ## [1.1.5] - 2026-07-24
 
 ### Updated
