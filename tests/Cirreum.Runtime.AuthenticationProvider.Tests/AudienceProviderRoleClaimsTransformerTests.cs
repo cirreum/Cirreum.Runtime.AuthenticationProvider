@@ -126,6 +126,28 @@ public class AudienceProviderRoleClaimsTransformerTests {
 	}
 
 	[Fact]
+	public async Task TransformAsync_ResolverReturnsDuplicateRoles_AddsEachRoleOnce() {
+		// IApplicationUser.Roles has no distinctness contract, so a resolver joining
+		// user -> group -> role can return the same role twice. Duplicated claims ride the
+		// principal into session tickets and connection state, so they cost payload on
+		// every round trip.
+		var context = new DefaultHttpContext();
+		context.Items[AuthenticationContextKeys.AuthenticatedScheme] = "descope";
+		var transformer = TransformerFor(context, ResolverFor("descope", "admin", "editor", "admin"));
+
+		var transformed = await transformer.TransformAsync(JwtPrincipal());
+
+		var identity = (ClaimsIdentity)transformed.Identity!;
+		identity.Claims.Count(c => c.Type == identity.RoleClaimType && c.Value == "admin")
+			.Should().Be(1);
+		transformed.IsInRole("admin").Should().BeTrue();
+		transformed.IsInRole("editor").Should().BeTrue();
+
+		// The reported count is what was added, not what the resolver returned.
+		Result(context).RoleCount.Should().Be(2);
+	}
+
+	[Fact]
 	public async Task TransformAsync_RolesAlreadyPresent_ShortCircuitsBeforeDispatch() {
 		// Workforce path: IdP-issued roles arrive in the token; the transformer must
 		// not fight them — and the resolver must never be consulted.

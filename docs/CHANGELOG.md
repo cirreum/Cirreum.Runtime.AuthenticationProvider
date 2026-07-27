@@ -52,6 +52,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contract with Kernel's `AddCirreum()` registration, and a rename that updated only the
   constant would leave the instrument unsubscribed and silently inert.
 
+### Fixed
+
+- **A resolver returning the same role twice no longer produces duplicate role claims.**
+  `IApplicationUser.Roles` is an `IReadOnlyList<string>` with no distinctness contract, so a
+  resolver joining user → group → role can legitimately return `["admin", "editor", "admin"]`
+  — and every entry was added unconditionally. The duplicate was not an authorization bug
+  (`IsInRole` still answers correctly) but the claims ride the principal into session tickets
+  and long-lived connection state, so they cost payload on every round trip.
+
+  Each role is now added only if the identity does not already answer to it. The check uses
+  `ClaimsIdentity.HasClaim`, whose predicate is exactly the one `ClaimsPrincipal.IsInRole`
+  uses — claim type ordinal-ignore-case, value ordinal — so a skipped role is precisely one
+  the identity already satisfies. Because each add is visible to the next check, the same pass
+  dedups within the resolver's list.
+
+  `ClaimsTransformResult.RoleCount` and the `RolesResolved` log now report the number of roles
+  actually added rather than the number returned. A `Debug` entry names the resolver and the
+  duplicate count so the resolver's own data issue is visible.
+
+  Note this is narrower than it may appear: roles already present on the identity were never
+  duplicated, because the transformer short-circuits with `roles-already-present` when the
+  identity carries any claim of the role claim type (or `roles` / `role`). The exposure was
+  duplicates *within* a single resolver's return value.
+
 ### Changed
 
 - **`AuthenticationProviderDiagnostics` → `AuthenticationTelemetry`.** Every peer telemetry

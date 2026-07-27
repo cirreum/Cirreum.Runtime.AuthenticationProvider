@@ -106,13 +106,14 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 		// Per-scheme dispatch over IApplicationUserResolver. Falls back to the
 		// resolver whose Scheme is null when no per-scheme resolver matches.
 		var resolver = this.SelectResolver(scheme);
-		var resolverType = resolver?.GetType().Name;
 
 		if (resolver is null) {
 			Log.NoResolver(logger, scheme ?? "(null)");
 			return Complete(principal, context, activity, startedAt,
 				AuthenticationTelemetry.OutcomeNoResolver, scheme: scheme);
 		}
+
+		var resolverType = resolver.GetType().Name;
 
 		// Skip when the principal already carries role claims (workforce IdP path).
 		var roleClaimType = identity.RoleClaimType;
@@ -153,8 +154,23 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 					AuthenticationTelemetry.OutcomeNoRolesResolved, resolverType, scheme, userId, roleClaimType);
 			}
 
+			// IApplicationUser.Roles is an IReadOnlyList with no distinctness contract, so a
+			// resolver joining user → group → role can return the same role twice. HasClaim's
+			// predicate is exactly the one ClaimsPrincipal.IsInRole uses — type
+			// ordinal-ignore-case, value ordinal — so a role skipped here is one the identity
+			// already answers to. Each add is visible to the next check, which dedups within
+			// the list as well as against what is already there.
+			var added = 0;
 			foreach (var role in roles) {
+				if (identity.HasClaim(roleClaimType, role)) {
+					continue;
+				}
 				identity.AddClaim(new Claim(roleClaimType, role));
+				added++;
+			}
+
+			if (added < roles.Count) {
+				Log.DuplicateRolesSkipped(logger, resolverType, roles.Count - added, userId);
 			}
 
 			if (logger.IsEnabled(LogLevel.Debug)) {
@@ -162,9 +178,9 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 				Log.RolesResolvedDetail(logger, rolesList, userId);
 			}
 
-			Log.RolesResolved(logger, roles.Count, userId, roleClaimType);
+			Log.RolesResolved(logger, added, userId, roleClaimType);
 			return Complete(principal, context, activity, startedAt,
-				AuthenticationTelemetry.OutcomeRolesResolved, resolverType, scheme, userId, roleClaimType, roles.Count);
+				AuthenticationTelemetry.OutcomeRolesResolved, resolverType, scheme, userId, roleClaimType, added);
 
 		} catch (Exception e) {
 			Log.RoleResolutionFailed(logger, e, userId);
@@ -281,6 +297,9 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 
 		[LoggerMessage(EventId = 1010, Level = LogLevel.Debug, Message = "Claims transformation: no application user found in app store for external user identifier '{UserId}'.")]
 		public static partial void NoApplicationUser(ILogger logger, string userId);
+
+		[LoggerMessage(EventId = 1011, Level = LogLevel.Debug, Message = "Resolver '{ResolverType}' returned {DuplicateCount} duplicate role(s) for user identifier '{UserId}'; they were not added a second time.")]
+		public static partial void DuplicateRolesSkipped(ILogger logger, string resolverType, int duplicateCount, string userId);
 	}
 
 }
