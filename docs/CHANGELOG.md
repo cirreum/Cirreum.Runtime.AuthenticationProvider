@@ -40,7 +40,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The transformation duration histogram deliberately takes only the outcome and scheme
   dimensions. Histogram buckets multiply per series, so the resolver dimension stays on the
   counter.
-- Test coverage for the telemetry contract (10 tests): instrument and tag names asserted as
+- The claims-transformation activity states `ActivityKind.Internal` explicitly rather than
+  relying on the `StartActivity` default. The span neither receives work nor sends it — it
+  runs inside the ASP.NET request pipeline, always as a child of the server span that already
+  accepted the request — so it is never an entry point and the host-dependent
+  `DomainContext.EntryPointActivityKind` would be wrong here. Stating the kind is what
+  `DomainContext` asks of a track gaining telemetry: the default is the same value, but
+  declaring it records that the choice was made.
+- Test coverage for the telemetry contract (11 tests): instrument and tag names asserted as
   literals rather than against their own constants — the names are half of a cross-package
   contract with Kernel's `AddCirreum()` registration, and a rename that updated only the
   constant would leave the instrument unsubscribed and silently inert.

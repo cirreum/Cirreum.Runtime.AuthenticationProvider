@@ -133,9 +133,18 @@ public static class AuthenticationTelemetry {
 	/// Starts the claims-transformation activity. Returns <see langword="null"/> when no
 	/// listeners are attached — every caller null-checks the activity.
 	/// </summary>
+	/// <remarks>
+	/// <see cref="ActivityKind.Internal"/>, stated rather than left to the default. The span
+	/// neither receives work nor sends it: transformation runs inside the ASP.NET request
+	/// pipeline, always as a child of the server span that already accepted the request. It is
+	/// never the span where work arrives, so the host-dependent
+	/// <see cref="DomainContext.EntryPointActivityKind"/> would be wrong here — on a server host
+	/// it would mark this as a second <see cref="ActivityKind.Server"/> span for a request that
+	/// was already received.
+	/// </remarks>
 	/// <param name="transformer">The transformer type name, recorded as <see cref="TransformerTag"/>.</param>
 	public static Activity? StartTransformActivity(string transformer) {
-		var activity = ActivitySource.StartActivity("ClaimsTransformation");
+		var activity = ActivitySource.StartActivity("ClaimsTransformation", ActivityKind.Internal);
 		activity?.SetTag(TransformerTag, transformer);
 		return activity;
 	}

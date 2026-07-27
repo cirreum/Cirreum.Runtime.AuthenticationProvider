@@ -102,6 +102,27 @@ public class AuthenticationTelemetryTests {
 	}
 
 	[Fact]
+	public void StartTransformActivity_IsInternal_NotAnEntryPointSpan() {
+		// Transformation neither receives work nor sends it — it runs inside the ASP.NET
+		// request pipeline, always as a child of the server span that already accepted the
+		// request. Using the host-dependent DomainContext.EntryPointActivityKind here would,
+		// on a server host, mark this as a second Server span for one request and draw the
+		// wrong graph.
+		using var listener = new System.Diagnostics.ActivityListener {
+			ShouldListenTo = source => source.Name == CirreumTelemetry.ActivitySources.Authentication,
+			Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _)
+				=> System.Diagnostics.ActivitySamplingResult.AllData
+		};
+		System.Diagnostics.ActivitySource.AddActivityListener(listener);
+
+		using var activity = AuthenticationTelemetry.StartTransformActivity("SomeTransformer");
+
+		activity.Should().NotBeNull();
+		activity!.Kind.Should().Be(System.Diagnostics.ActivityKind.Internal);
+		activity.GetTagItem(AuthenticationTelemetry.TransformerTag).Should().Be("SomeTransformer");
+	}
+
+	[Fact]
 	public void RecordSchemeSelection_EmitsCounter_TaggedWithSchemeAndSelector() {
 		using var capture = new MetricCapture();
 
