@@ -202,22 +202,26 @@ public class AudienceProviderRoleClaimsTransformerTests {
 	}
 
 	[Fact]
-	public async Task TransformAsync_EntraObjectIdUri_OutranksSub() {
-		// oid is tenant-stable; sub can be pairwise per application. The Kernel order prefers
-		// the long-form Entra OID over sub, so the application user resolves on the same
-		// identifier UserProfile and IUserState key on.
+	public async Task TransformAsync_IdentifierPriority_DoesNotDependOnClaimOrder() {
+		// oid is tenant-stable; sub can be pairwise per application, so the Kernel order
+		// prefers the long-form Entra OID over sub. `sub` is deliberately listed FIRST here:
+		// a resolver that scans the claim collection for the first type-match rather than
+		// walking types in priority order returns whichever the token happened to emit first,
+		// which is not a property of the token worth depending on.
 		var context = new DefaultHttpContext();
 		context.Items[AuthenticationContextKeys.AuthenticatedScheme] = "descope";
 		var resolver = ResolverFor("descope", "admin");
 		var transformer = TransformerFor(context, resolver);
 
 		var principal = new ClaimsPrincipal(new ClaimsIdentity([
-			new Claim("http://schemas.microsoft.com/identity/claims/objectidentifier", "entra-oid"),
-			new Claim("sub", "pairwise-sub")], FederationAuthenticationType));
+			new Claim("sub", "pairwise-sub"),
+			new Claim("http://schemas.microsoft.com/identity/claims/objectidentifier", "entra-oid")],
+			FederationAuthenticationType));
 
 		await transformer.TransformAsync(principal);
 
 		await resolver.Received(1).ResolveAsync("entra-oid", Arg.Any<CancellationToken>());
+		await resolver.DidNotReceive().ResolveAsync("pairwise-sub", Arg.Any<CancellationToken>());
 	}
 
 	[Fact]

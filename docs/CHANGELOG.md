@@ -78,10 +78,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **`ClaimTypes.NameIdentifier` was not recognized.** The OIDC middleware maps `sub` onto that
     URI when `MapInboundClaims` is enabled, so those principals resolved no identifier at all —
     outcome `no-user-identifier`, and no application roles were ever added.
-  - **`sub` outranked the long-form Entra object identifier.** The Kernel order prefers `oid`
-    because it is tenant-stable while `sub` can be pairwise per application. With both claims
-    present the transformer keyed the application user on a different identifier than
-    `UserProfile` and `IUserState` key on, for the same user.
+  - **There was no priority order at all.** The copy scanned the claim collection and returned
+    the first claim whose *type* matched any of the four it knew — so with both `sub` and the
+    long-form Entra object identifier present, which one identified the user depended on the
+    order the token happened to emit them in. `ClaimsHelper` walks claim *types* in priority
+    order instead, preferring `oid` because it is tenant-stable while `sub` can be pairwise per
+    application. The application user now keys on the same identifier `UserProfile` and
+    `IUserState` key on, deterministically.
 
 - **The role short-circuit now spans every identity.** It inspected only the primary identity,
   while `ClaimsPrincipal.IsInRole` — and the Kernel's own `IdentityScope.AllIdentities` default
