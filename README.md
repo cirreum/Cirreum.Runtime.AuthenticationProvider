@@ -40,6 +40,8 @@ The single bootstrap entry point, invoked by the umbrella package (`AddAuthentic
 
 The framework-shipped `IClaimsTransformation` that runs after ASP.NET authentication completes. It reads the resolved scheme for the request and dispatches to the per-scheme `IApplicationUserResolver` the app registered, producing the Cirreum `IApplicationUser` and its role claims. Wired by the umbrella; one registration covers every scheme.
 
+It follows the Kernel's identity-scope rule on a multi-identity principal: the user identifier is a singular fact, resolved from the **primary identity** via `ClaimsHelper.ResolveId` or not at all — an identifier borrowed from a second authentication context would load a different subject's application user. The "already has roles" check is the one aggregate, so it spans **every** identity against that identity's own `RoleClaimType`, matching the breadth of `ClaimsPrincipal.IsInRole`. Each resolved role is added once.
+
 #### `TwoPhaseAuth` — `connection.Promote(principal)`
 
 Connection-state promotion for long-lived connections (SignalR / WebSocket). Lets a connection that established with an anonymous sentinel principal be promoted to a fully authenticated principal mid-connection (e.g. after an in-band handshake), without tearing down and re-establishing:
@@ -50,9 +52,19 @@ connection.Promote(authenticatedPrincipal);
 
 `Promote` requires an authenticated principal, supports re-promotion (the newest principal wins), and evicts the connection's cached application user before stamping — so an invocation constructed mid-promotion can never pair the promoted principal with the previous identity's cached user. Read the promoted state through the `Cirreum.Contracts` connection surface: `connection.PromotedUser`, `connection.EffectiveUser`, and `connection.IsUserPromoted`.
 
-#### Diagnostics
+#### `AuthenticationTelemetry`
 
-`AuthenticationProviderDiagnostics` exposes the Authentication runtime's `ActivitySource` and `Meter` for tracing and metrics.
+The Authentication track's shared `ActivitySource` and `Meter`, plus the tag-name, outcome-value and metric-name constants every authentication emitter uses. Nothing needs subscribing — `AddCirreum()` already registers the `Cirreum.Authentication` source and meter.
+
+| Instrument | Kind | Tags |
+|---|---|---|
+| `cirreum.authn.transformations` | Counter | `outcome`, `scheme`, `resolver` |
+| `cirreum.authn.transformation.duration` | Histogram (ms) | `outcome`, `scheme` |
+| `cirreum.authn.selections` | Counter | `scheme`, `selector` |
+
+`cirreum.authn.selections` is recorded by the umbrella package's forward-scheme resolver via the public `RecordSchemeSelection` — the single site every `ISchemeSelector` is dispatched through, so one call covers the whole registered set. A `selector` value of `none` means nothing claimed the request and the resolver fell through to its default.
+
+The external user identifier is recorded on the activity only, never as a metric dimension.
 
 ## Dependencies
 

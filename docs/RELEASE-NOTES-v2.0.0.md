@@ -91,6 +91,45 @@ consistently nor internally consistent: `auth.transform.outcome` sat alongside
 `auth.transformer.name`, and the user identifier was `external.user.id`. Full table in
 [`MIGRATION-v2.md`](MIGRATION-v2.md).
 
+## The part that breaks nothing and changes everything
+
+The claims transformer carried its own copy of the Kernel's claim-resolution logic, and the copy was
+on the wrong side of the framework's identity-scope rule **in both directions**: it read the user
+identifier across every identity (a singular fact, which the Kernel scopes to the primary identity)
+and checked for existing roles on only one (an aggregate, which `ClaimsPrincipal.IsInRole` spans).
+
+The identifier one was not cosmetic. That value goes to `IApplicationUserResolver.ResolveAsync`, so a
+`sub` on a secondary identity would load **that subject's application user and stamp their roles onto
+the current principal**. It now resolves from the primary identity or not at all.
+
+Deleting the copy in favor of `ClaimsHelper.ResolveId` closed three more divergences it had
+accumulated:
+
+- **A blank claim shadowed a populated one** — an empty `oid` suppressed a valid `sub` and escaped as
+  a non-null identifier into your resolver.
+- **`ClaimTypes.NameIdentifier` was unknown** — the OIDC middleware maps `sub` onto that URI when
+  `MapInboundClaims` is enabled, so those principals resolved nothing and never received application
+  roles.
+- **There was no priority order at all** — it returned the first claim in the collection whose *type*
+  matched, so with both `sub` and the Entra object identifier present, which one identified the user
+  depended on the order the token emitted them in.
+
+Also: a role the resolver returns twice is now added once. Not an authorization bug — `IsInRole`
+answered correctly either way — but duplicate claims ride the principal into session tickets and
+long-lived connection state, costing payload on every round trip.
+
+**None of this breaks the build**, which is exactly why it is worth reading. On a single-identity
+principal carrying one identifier claim — what the Cirreum Server, Serverless and Client hosts
+compose — none of it fires. Two cases deserve a check before you upgrade:
+
+- **Your store is keyed on `sub` and your tokens also carry the Entra object identifier.** Lookups
+  will now resolve on `oid` and miss. Re-key on what `ClaimsHelper.ResolveId` returns — which is what
+  `UserProfile` and `IUserState` already use for the same user.
+- **You worked around the missing `NameIdentifier` mapping.** Those principals now resolve on their
+  own; check for double-granting.
+
+Full detail in [`MIGRATION-v2.md`](MIGRATION-v2.md) §6.
+
 ## Also fixed
 
 **Outcomes that exit before resolver dispatch now carry the scheme.** The already-transformed and
@@ -111,11 +150,15 @@ record one instrument and forget the others — which is how the missing scheme 
 
 ## Compatibility
 
-Breaking. The renamed class and removed constant are compile errors. The metric rename, the tag
-renames and the outcome-value change are silent and affect dashboards, saved queries and any code
-comparing `ClaimsTransformResult.Outcome` against a string literal.
+Breaking. The renamed class and removed constant are compile errors.
 
-See [`MIGRATION-v2.md`](MIGRATION-v2.md) for the full find/replace table.
+Everything else is silent. The metric rename, the tag renames and the outcome-value change affect
+dashboards, saved queries and any code comparing `ClaimsTransformResult.Outcome` against a string
+literal. The transformer corrections change which principals resolve an application user and which
+receive roles, with no compile signal at all.
+
+See [`MIGRATION-v2.md`](MIGRATION-v2.md) — find/replace table for the compile breaks, §6 for the
+silent ones.
 
 ## Coordinated downstream work
 
