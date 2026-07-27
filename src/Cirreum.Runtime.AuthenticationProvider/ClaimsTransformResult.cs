@@ -6,8 +6,12 @@ namespace Cirreum.AuthenticationProvider;
 /// <c>httpContext.Items[ClaimsTransformResult.ItemsKey]</c> during debugging or in
 /// diagnostic middleware.
 /// </summary>
-/// <param name="Outcome">The transformation outcome (e.g. <c>RolesResolved</c>,
-/// <c>AlreadyTransformed</c>, <c>NoUserIdentifier</c>).</param>
+/// <param name="Outcome">The transformation outcome — one of the
+/// <c>AuthenticationTelemetry.Outcome*</c> constants (e.g.
+/// <see cref="AuthenticationTelemetry.OutcomeRolesResolved"/>). The same value is
+/// recorded as the <see cref="AuthenticationTelemetry.OutcomeTag"/> dimension on the
+/// transformation metrics and activity, so a metric or trace can be joined to this
+/// record without a translation table.</param>
 /// <param name="ResolverType">The concrete <see cref="IApplicationUserResolver"/>
 /// type name, if resolution was attempted.</param>
 /// <param name="Scheme">The authentication scheme the request was dispatched

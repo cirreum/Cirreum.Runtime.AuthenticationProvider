@@ -5,6 +5,7 @@ using Cirreum.Authentication;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using System.Diagnostics;
 using System.Security.Claims;
 
 /// <summary>
@@ -55,20 +56,31 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 	/// <inheritdoc/>
 	public async Task<ClaimsPrincipal> TransformAsync(ClaimsPrincipal principal) {
 
+		var startedAt = Stopwatch.GetTimestamp();
+		using var activity = AuthenticationTelemetry.StartTransformActivity(
+			nameof(AudienceProviderRoleClaimsTransformer));
+
 		var context = httpContextAccessor.HttpContext;
 		if (context is null) {
+			// No context to stash a ClaimsTransformResult on — record straight to telemetry
+			// so the counter's total still equals the invocation count.
+			AuthenticationTelemetry.RecordTransformation(
+				activity,
+				AuthenticationTelemetry.OutcomeNoHttpContext,
+				durationMs: Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
 			Log.NoHttpContext(logger);
 			return principal;
 		}
 
-		using var activity = AuthenticationProviderDiagnostics.ActivitySource.StartActivity("ClaimsTransformation");
-		activity?.SetTag("auth.transformer.name", nameof(AudienceProviderRoleClaimsTransformer));
+		// Read the forward selector's stamp up front so the outcomes that exit before
+		// dispatch still carry the scheme dimension — otherwise a double transformation or
+		// a malformed identity is unattributable to the IdP that caused it.
+		var stampedScheme = context.Items[AuthenticationContextKeys.AuthenticatedScheme] as string;
 
 		if (context.Items.ContainsKey(TransformedKey)) {
-			AuthenticationProviderDiagnostics.TransformCounter.Add(1, new KeyValuePair<string, object?>("outcome", "already_transformed"));
-			activity?.SetTag("auth.transform.outcome", "AlreadyTransformed");
 			Log.AlreadyTransformed(logger);
-			return Return(principal, context, "AlreadyTransformed");
+			return Complete(principal, context, activity, startedAt,
+				AuthenticationTelemetry.OutcomeAlreadyTransformed, scheme: stampedScheme);
 		}
 
 		// Mark immediately — prevents re-entry if ASP.NET calls TransformAsync again
@@ -76,10 +88,9 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 		context.Items[TransformedKey] = true;
 
 		if (principal.Identity is not ClaimsIdentity identity) {
-			AuthenticationProviderDiagnostics.TransformCounter.Add(1, new KeyValuePair<string, object?>("outcome", "no_claims_identity"));
-			activity?.SetTag("auth.transform.outcome", "NoClaimsIdentity");
 			Log.NoClaimsIdentity(logger);
-			return Return(principal, context, "NoClaimsIdentity");
+			return Complete(principal, context, activity, startedAt,
+				AuthenticationTelemetry.OutcomeNoClaimsIdentity, scheme: stampedScheme);
 		}
 
 		// Defensive stamp of the canonical scheme key for routes wired to an explicit
@@ -90,50 +101,45 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 		// Dispatch on the slot, not on AuthenticationType: JWT identities carry the token
 		// handler's fixed "AuthenticationTypes.Federation" label rather than a scheme name,
 		// so only the forward selector's stamp identifies which scheme authenticated.
-		var scheme = context.Items[AuthenticationContextKeys.AuthenticatedScheme] as string
-			?? identity.AuthenticationType;
-		activity?.SetTag("auth.scheme", scheme);
+		var scheme = stampedScheme ?? identity.AuthenticationType;
 
 		// Per-scheme dispatch over IApplicationUserResolver. Falls back to the
 		// resolver whose Scheme is null when no per-scheme resolver matches.
 		var resolver = this.SelectResolver(scheme);
 		var resolverType = resolver?.GetType().Name;
-		activity?.SetTag("auth.resolver.type", resolverType);
 
 		if (resolver is null) {
-			AuthenticationProviderDiagnostics.TransformCounter.Add(1, new KeyValuePair<string, object?>("outcome", "no_resolver"));
-			activity?.SetTag("auth.transform.outcome", "NoResolver");
 			Log.NoResolver(logger, scheme ?? "(null)");
-			return Return(principal, context, "NoResolver", scheme: scheme);
+			return Complete(principal, context, activity, startedAt,
+				AuthenticationTelemetry.OutcomeNoResolver, scheme: scheme);
 		}
 
 		// Skip when the principal already carries role claims (workforce IdP path).
 		var roleClaimType = identity.RoleClaimType;
-		activity?.SetTag("auth.role_claim_type", roleClaimType);
 		if (ContainsRoles(identity, roleClaimType)) {
-			AuthenticationProviderDiagnostics.TransformCounter.Add(1, new KeyValuePair<string, object?>("outcome", "roles_already_present"));
-			activity?.SetTag("auth.transform.outcome", "RolesAlreadyPresent");
 			Log.RolesAlreadyPresent(logger, roleClaimType);
-			return Return(principal, context, "RolesAlreadyPresent", resolverType, scheme, roleClaimType: roleClaimType);
+			return Complete(principal, context, activity, startedAt,
+				AuthenticationTelemetry.OutcomeRolesAlreadyPresent, resolverType, scheme, roleClaimType: roleClaimType);
 		}
 
 		var userId = FindUserId(principal);
 		if (userId is null) {
-			AuthenticationProviderDiagnostics.TransformCounter.Add(1, new KeyValuePair<string, object?>("outcome", "no_user_id"));
-			activity?.SetTag("auth.transform.outcome", "NoUserIdentifier");
 			Log.NoUserIdentifier(logger);
-			return Return(principal, context, "NoUserIdentifier", resolverType, scheme, roleClaimType: roleClaimType);
+			return Complete(principal, context, activity, startedAt,
+				AuthenticationTelemetry.OutcomeNoUserIdentifier, resolverType, scheme, roleClaimType: roleClaimType);
 		}
-		activity?.SetTag("external.user.id", userId);
+
+		// Activity only — the external user identifier is unbounded, so it never becomes
+		// a metric dimension.
+		activity?.SetTag(AuthenticationTelemetry.UserIdTag, userId);
 
 		try {
 			var applicationUser = await resolver.ResolveAsync(userId, context.RequestAborted);
 
 			if (applicationUser is null) {
-				AuthenticationProviderDiagnostics.TransformCounter.Add(1, new KeyValuePair<string, object?>("outcome", "no_application_user"));
-				activity?.SetTag("auth.transform.outcome", "NoApplicationUser");
 				Log.NoApplicationUser(logger, userId);
-				return Return(principal, context, "NoApplicationUser", resolverType, scheme, userId, roleClaimType);
+				return Complete(principal, context, activity, startedAt,
+					AuthenticationTelemetry.OutcomeNoApplicationUser, resolverType, scheme, userId, roleClaimType);
 			}
 
 			// Cache the resolved user for downstream request-scoped consumers
@@ -142,14 +148,11 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 
 			var roles = applicationUser.Roles;
 			if (roles is null or { Count: 0 }) {
-				AuthenticationProviderDiagnostics.TransformCounter.Add(1, new KeyValuePair<string, object?>("outcome", "no_roles_resolved"));
-				activity?.SetTag("auth.transform.outcome", "NoRolesResolved");
 				Log.NoRolesResolved(logger, userId);
-				return Return(principal, context, "NoRolesResolved", resolverType, scheme, userId, roleClaimType);
+				return Complete(principal, context, activity, startedAt,
+					AuthenticationTelemetry.OutcomeNoRolesResolved, resolverType, scheme, userId, roleClaimType);
 			}
 
-			activity?.SetTag("auth.roles.count", roles.Count);
-			AuthenticationProviderDiagnostics.TransformCounter.Add(1, new KeyValuePair<string, object?>("outcome", "roles_resolved"));
 			foreach (var role in roles) {
 				identity.AddClaim(new Claim(roleClaimType, role));
 			}
@@ -159,15 +162,14 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 				Log.RolesResolvedDetail(logger, rolesList, userId);
 			}
 
-			activity?.SetTag("auth.transform.outcome", "RolesResolved");
 			Log.RolesResolved(logger, roles.Count, userId, roleClaimType);
-			return Return(principal, context, "RolesResolved", resolverType, scheme, userId, roleClaimType, roles.Count);
+			return Complete(principal, context, activity, startedAt,
+				AuthenticationTelemetry.OutcomeRolesResolved, resolverType, scheme, userId, roleClaimType, roles.Count);
 
 		} catch (Exception e) {
-			AuthenticationProviderDiagnostics.TransformCounter.Add(1, new KeyValuePair<string, object?>("outcome", "role_resolution_failed"));
 			Log.RoleResolutionFailed(logger, e, userId);
-			activity?.SetTag("auth.transform.outcome", "RoleResolutionFailed");
-			return Return(principal, context, "RoleResolutionFailed", resolverType, scheme, userId, roleClaimType);
+			return Complete(principal, context, activity, startedAt,
+				AuthenticationTelemetry.OutcomeRoleResolutionFailed, resolverType, scheme, userId, roleClaimType);
 		}
 	}
 
@@ -219,15 +221,27 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 		return null;
 	}
 
-	private static ClaimsPrincipal Return(
+	/// <summary>
+	/// The single exit path: records telemetry and stashes the diagnostic result. Every
+	/// outcome routes through here so a future branch cannot record one instrument and
+	/// forget the other.
+	/// </summary>
+	private static ClaimsPrincipal Complete(
 		ClaimsPrincipal principal,
 		HttpContext context,
+		Activity? activity,
+		long startedAt,
 		string outcome,
 		string? resolverType = null,
 		string? scheme = null,
 		string? userId = null,
 		string? roleClaimType = null,
 		int? roleCount = null) {
+
+		AuthenticationTelemetry.RecordTransformation(
+			activity, outcome, scheme, resolverType, roleClaimType, roleCount,
+			Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
+
 		context.Items[ClaimsTransformResult.ItemsKey] = new ClaimsTransformResult(
 			outcome, resolverType, scheme, userId, roleClaimType, roleCount);
 		return principal;

@@ -58,7 +58,7 @@ public class AudienceProviderRoleClaimsTransformerTests {
 
 		var transformed = await transformer.TransformAsync(principal);
 
-		Result(context).Outcome.Should().Be("RolesResolved");
+		Result(context).Outcome.Should().Be(AuthenticationTelemetry.OutcomeRolesResolved);
 		transformed.IsInRole("admin").Should().BeTrue();
 		transformed.IsInRole("editor").Should().BeTrue();
 		await resolver.Received(1).ResolveAsync("user-1", Arg.Any<CancellationToken>());
@@ -91,7 +91,7 @@ public class AudienceProviderRoleClaimsTransformerTests {
 
 		var transformed = await transformer.TransformAsync(principal);
 
-		Result(context).Outcome.Should().Be("RolesResolved");
+		Result(context).Outcome.Should().Be(AuthenticationTelemetry.OutcomeRolesResolved);
 		transformed.IsInRole("admin").Should().BeTrue();
 		context.Items[AuthenticationContextKeys.AuthenticatedScheme].Should().Be("ApiKey");
 	}
@@ -120,7 +120,7 @@ public class AudienceProviderRoleClaimsTransformerTests {
 
 		var transformed = await transformer.TransformAsync(JwtPrincipal());
 
-		Result(context).Outcome.Should().Be("NoResolver");
+		Result(context).Outcome.Should().Be(AuthenticationTelemetry.OutcomeNoResolver);
 		transformed.Claims.Should().NotContain(c => c.Type == ClaimTypes.Role);
 		await other.DidNotReceive().ResolveAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
 	}
@@ -136,7 +136,7 @@ public class AudienceProviderRoleClaimsTransformerTests {
 
 		await transformer.TransformAsync(JwtPrincipal(role: "operator"));
 
-		Result(context).Outcome.Should().Be("RolesAlreadyPresent");
+		Result(context).Outcome.Should().Be(AuthenticationTelemetry.OutcomeRolesAlreadyPresent);
 		await resolver.DidNotReceive().ResolveAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
 	}
 

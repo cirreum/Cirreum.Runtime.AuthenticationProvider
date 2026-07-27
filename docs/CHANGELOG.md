@@ -9,18 +9,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The authentication track is now instrumented to answer *which scheme* and *why*, not
+  only *how many*.** Authentication emitted a single counter carrying an `outcome` tag;
+  authorization emitted four instruments across eleven dimensions. The gap was not cosmetic —
+  none of these were answerable from telemetry alone: which scheme was selected for a request,
+  how often selection matched nothing, how often a scheme's `IApplicationUserResolver` failed
+  or found no user, how long the claims transformer took, and how authenticated schemes were
+  distributed across a multi-IdP deployment. That last one matters most since
+  `IdentityProviderType` was removed: the authenticated scheme is now the single authoritative
+  answer to "which identity provider handled this request", and it was recorded only on the
+  activity, never as a metric dimension.
+- **`AuthenticationTelemetry`** — the authentication counterpart to `AuthorizationTelemetry`,
+  publishing the shared `ActivitySource` and `Meter` plus public tag-name, outcome-value and
+  metric-name constants. Replaces `AuthenticationProviderDiagnostics` (see **Changed**).
+- **`cirreum.authn.transformation.duration`** — claims transformation duration in
+  milliseconds, tagged with outcome and scheme.
+- **`cirreum.authn.selections`** — scheme-selection counter, tagged with the resolved scheme
+  and the `ISchemeSelector` that claimed the request. A `none` selector value means nothing
+  claimed the request and the resolver fell through to its default, which distinguishes a
+  genuine Anonymous selection from a misconfigured selector set. Recorded via the public
+  `AuthenticationTelemetry.RecordSchemeSelection`, which the umbrella package
+  (`Cirreum.Runtime.Authentication`) calls from its forward-scheme resolver — the single site
+  every selector is dispatched through, so one call covers the whole registered set,
+  framework-shipped and app-supplied alike.
+- **`cirreum.authn.transformations` now carries `scheme` and `resolver` dimensions**, and
+  records a `no-http-context` outcome that previously returned silently — so the counter's
+  total equals the invocation count.
+- The transformation duration histogram deliberately takes only the outcome and scheme
+  dimensions. Histogram buckets multiply per series, so the resolver dimension stays on the
+  counter.
+- Test coverage for the telemetry contract (10 tests): instrument and tag names asserted as
+  literals rather than against their own constants — the names are half of a cross-package
+  contract with Kernel's `AddCirreum()` registration, and a rename that updated only the
+  constant would leave the instrument unsubscribed and silently inert.
+
 ### Changed
 
+- **`AuthenticationProviderDiagnostics` → `AuthenticationTelemetry`.** Every peer telemetry
+  class in the framework is named `*Telemetry` (`AuthorizationTelemetry`,
+  `ProvisioningTelemetry`); this one was the outlier, and it now carries the full tag and
+  outcome vocabulary rather than a lone metric name. See `MIGRATION-v2.md`.
+- **Transformation outcomes are a single vocabulary across metrics, traces and the diagnostic
+  record.** The counter reported `already_transformed` while the activity and the public
+  `ClaimsTransformResult.Outcome` reported `AlreadyTransformed` — two spellings of one fact, so
+  joining a metric to a trace or to the stashed result needed a translation table. All three now
+  emit the lowercase-hyphenated `AuthenticationTelemetry.Outcome*` constants
+  (`already-transformed`, `roles-resolved`, `role-resolution-failed`, …), matching
+  `AuthorizationTelemetry`'s value style. **`ClaimsTransformResult.Outcome` values changed** —
+  see `MIGRATION-v2.md`.
+- **Activity tag names are now `cirreum.authn.*` constants** rather than the local literals
+  `auth.transformer.name`, `auth.transform.outcome`, `auth.scheme`, `auth.resolver.type`,
+  `auth.role_claim_type`, `auth.roles.count` and `external.user.id`. The old set was neither
+  prefixed consistently nor internally consistent (`auth.transform.*` alongside
+  `auth.transformer.*`).
+- **Outcomes that exit before resolver dispatch now carry the scheme dimension.** The
+  already-transformed and no-claims-identity paths recorded no scheme, so a double
+  transformation or a malformed identity was unattributable to the IdP that caused it. The
+  transformer reads the forward selector's stamp up front and passes it to every exit.
+- Every transformation outcome now routes through one exit path that records the counter, the
+  duration and the activity tags together. Each outcome previously repeated three separate
+  calls, so a new branch could record one instrument and forget the others.
 - **`auth_transformations_total` → `cirreum.authn.transformations`.** The instrument was the only
   one in the framework using underscores as segment separators; everything else is dot-separated
   (`cirreum.authz.decisions`, `conductor.operations.total`). Underscores now separate words
   *within* a segment only, matching OpenTelemetry conventions. The `_total` suffix is dropped as
   well — that is a Prometheus exposition detail an exporter appends, not part of an instrument
-  name. The name is now the public constant `AuthenticationProviderDiagnostics.TransformationsMetric`.
+  name. The name is now the public constant `AuthenticationTelemetry.TransformationsMetric`.
 
 ### Removed
 
-- **`AuthenticationProviderDiagnostics.DiagnosticName`.** It restated the literal
+- **`AuthenticationProviderDiagnostics.DiagnosticName`** (on the class now named
+  `AuthenticationTelemetry`). It restated the literal
   `"Cirreum.Authentication"` — the same value as `CirreumTelemetry.ActivitySources.Authentication`
   and `.Meters.Authentication`. Those constants are the registration half of a cross-package
   contract: Kernel's `AddCirreum()` subscribes exactly those names, and a source or meter whose name
