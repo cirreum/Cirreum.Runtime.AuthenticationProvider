@@ -54,6 +54,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The application user is no longer resolved from an identifier borrowed off a secondary
+  identity.** The transformer searched `principal.Claims`, which spans every identity the
+  principal carries. A user identifier is a singular fact, and the Kernel's resolvers scope
+  those to the primary identity precisely because a value taken from a second authentication
+  context is not a broader answer — it is an answer about someone else. Here the consequence
+  was concrete rather than cosmetic: that identifier is handed to
+  `IApplicationUserResolver.ResolveAsync`, so a `sub` belonging to a second identity would load
+  *that* subject's application user and stamp their roles onto the current principal.
+
+  Resolution now runs against the primary identity, which is the identity the transformer had
+  already matched and is mutating.
+
+- **Three further divergences closed by deleting a hand-rolled copy of `ClaimsHelper.ResolveId`.**
+  The transformer carried its own claim-order search rather than calling the Kernel resolver,
+  and the copy had drifted:
+
+  - **A blank claim shadowed a populated one.** The copy returned the first claim of a matching
+    *type* regardless of its value, so a present-but-empty `oid` suppressed a valid `sub` and
+    escaped as a non-null identifier into the resolver. `ClaimsHelper` treats a blank claim as
+    absent; this is the same defect class swept across four packages on 2026-07-26, surviving
+    here in a duplicate of the helper that was fixed.
+  - **`ClaimTypes.NameIdentifier` was not recognized.** The OIDC middleware maps `sub` onto that
+    URI when `MapInboundClaims` is enabled, so those principals resolved no identifier at all —
+    outcome `no-user-identifier`, and no application roles were ever added.
+  - **`sub` outranked the long-form Entra object identifier.** The Kernel order prefers `oid`
+    because it is tenant-stable while `sub` can be pairwise per application. With both claims
+    present the transformer keyed the application user on a different identifier than
+    `UserProfile` and `IUserState` key on, for the same user.
+
+- **The role short-circuit now spans every identity.** It inspected only the primary identity,
+  while `ClaimsPrincipal.IsInRole` — and the Kernel's own `IdentityScope.AllIdentities` default
+  for roles — span all of them. Roles are the one aggregate among these reads, so breadth is
+  correct: a role on a secondary identity is one the principal genuinely answers to, and adding
+  application-store roles on top of it fights an IdP whose roles are already in effect. Each
+  identity is read against its own `RoleClaimType`, matching how `IsInRole` evaluates a
+  multi-identity principal.
+
+  On the single-identity principals the Cirreum Server, Serverless and Client hosts compose,
+  this changes nothing. It matters when parts of Cirreum run in a host that composes principals
+  differently.
+
 - **A resolver returning the same role twice no longer produces duplicate role claims.**
   `IApplicationUser.Roles` is an `IReadOnlyList<string>` with no distinctness contract, so a
   resolver joining user → group → role can legitimately return `["admin", "editor", "admin"]`

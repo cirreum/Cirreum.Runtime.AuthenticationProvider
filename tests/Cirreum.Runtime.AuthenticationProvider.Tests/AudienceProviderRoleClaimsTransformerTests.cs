@@ -126,6 +126,101 @@ public class AudienceProviderRoleClaimsTransformerTests {
 	}
 
 	[Fact]
+	public async Task TransformAsync_UserIdOnSecondaryIdentity_IsNotBorrowed() {
+		// A singular fact read across identities is not a broader answer, it is an answer
+		// about someone else -- and here it would load THAT subject's application user and
+		// stamp their roles onto this principal. Primary identity or nothing.
+		var context = new DefaultHttpContext();
+		context.Items[AuthenticationContextKeys.AuthenticatedScheme] = "descope";
+		var resolver = ResolverFor("descope", "admin");
+		var transformer = TransformerFor(context, resolver);
+
+		var principal = new ClaimsPrincipal(new ClaimsIdentity([], FederationAuthenticationType));
+		principal.AddIdentity(new ClaimsIdentity([new Claim("sub", "other-subject")], "secondary"));
+
+		var transformed = await transformer.TransformAsync(principal);
+
+		Result(context).Outcome.Should().Be(AuthenticationTelemetry.OutcomeNoUserIdentifier);
+		transformed.Claims.Should().NotContain(c => c.Type == ClaimTypes.Role);
+		await resolver.DidNotReceive().ResolveAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+	}
+
+	[Fact]
+	public async Task TransformAsync_RolesOnSecondaryIdentity_ShortCircuits() {
+		// Roles are the one aggregate: IsInRole already spans every identity, so a role on a
+		// secondary identity is one the principal genuinely answers to. Adding application
+		// roles on top would fight an IdP whose roles are already in effect.
+		var context = new DefaultHttpContext();
+		context.Items[AuthenticationContextKeys.AuthenticatedScheme] = "descope";
+		var resolver = ResolverFor("descope", "shadowed");
+		var transformer = TransformerFor(context, resolver);
+
+		var principal = JwtPrincipal();
+		principal.AddIdentity(new ClaimsIdentity([new Claim(ClaimTypes.Role, "operator")], "secondary"));
+
+		await transformer.TransformAsync(principal);
+
+		Result(context).Outcome.Should().Be(AuthenticationTelemetry.OutcomeRolesAlreadyPresent);
+		await resolver.DidNotReceive().ResolveAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+	}
+
+	[Fact]
+	public async Task TransformAsync_BlankOidDoesNotShadowPopulatedSub() {
+		// A present-but-blank claim is treated as absent rather than as an answer -- it must
+		// not shadow a populated claim further down the resolution order, and must not escape
+		// as a non-null identifier into the resolver.
+		var context = new DefaultHttpContext();
+		context.Items[AuthenticationContextKeys.AuthenticatedScheme] = "descope";
+		var resolver = ResolverFor("descope", "admin");
+		var transformer = TransformerFor(context, resolver);
+
+		var principal = new ClaimsPrincipal(new ClaimsIdentity(
+			[new Claim("oid", "   "), new Claim("sub", "real-subject")], FederationAuthenticationType));
+
+		await transformer.TransformAsync(principal);
+
+		await resolver.Received(1).ResolveAsync("real-subject", Arg.Any<CancellationToken>());
+	}
+
+	[Fact]
+	public async Task TransformAsync_MappedNameIdentifier_ResolvesTheUser() {
+		// OIDC middleware maps `sub` to the nameidentifier URI when MapInboundClaims is
+		// enabled. The Kernel resolver covers that claim type; the transformer's own former
+		// copy did not, so those principals resolved no identifier and got no roles.
+		var context = new DefaultHttpContext();
+		context.Items[AuthenticationContextKeys.AuthenticatedScheme] = "descope";
+		var resolver = ResolverFor("descope", "admin");
+		var transformer = TransformerFor(context, resolver);
+
+		var principal = new ClaimsPrincipal(new ClaimsIdentity(
+			[new Claim(ClaimTypes.NameIdentifier, "mapped-subject")], FederationAuthenticationType));
+
+		var transformed = await transformer.TransformAsync(principal);
+
+		await resolver.Received(1).ResolveAsync("mapped-subject", Arg.Any<CancellationToken>());
+		transformed.IsInRole("admin").Should().BeTrue();
+	}
+
+	[Fact]
+	public async Task TransformAsync_EntraObjectIdUri_OutranksSub() {
+		// oid is tenant-stable; sub can be pairwise per application. The Kernel order prefers
+		// the long-form Entra OID over sub, so the application user resolves on the same
+		// identifier UserProfile and IUserState key on.
+		var context = new DefaultHttpContext();
+		context.Items[AuthenticationContextKeys.AuthenticatedScheme] = "descope";
+		var resolver = ResolverFor("descope", "admin");
+		var transformer = TransformerFor(context, resolver);
+
+		var principal = new ClaimsPrincipal(new ClaimsIdentity([
+			new Claim("http://schemas.microsoft.com/identity/claims/objectidentifier", "entra-oid"),
+			new Claim("sub", "pairwise-sub")], FederationAuthenticationType));
+
+		await transformer.TransformAsync(principal);
+
+		await resolver.Received(1).ResolveAsync("entra-oid", Arg.Any<CancellationToken>());
+	}
+
+	[Fact]
 	public async Task TransformAsync_ResolverReturnsDuplicateRoles_AddsEachRoleOnce() {
 		// IApplicationUser.Roles has no distinctness contract, so a resolver joining
 		// user -> group -> role can return the same role twice. Duplicated claims ride the
