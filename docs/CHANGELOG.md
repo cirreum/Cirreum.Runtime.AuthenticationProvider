@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-07-31
+
 ### Updated
 
 - Updated NuGet packages (Cirreum spine 4.0.1 wave: `Cirreum.Domain` 4.0.1 / `Cirreum.AuthenticationProvider` 2.0.3 / `Cirreum.Services.*` repins).
