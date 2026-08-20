@@ -1,4 +1,4 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to this project will be documented in this file.
 
@@ -8,6 +8,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 ## [Unreleased]
+
+### Added
+
+- **The role-claims transformer reads the scheme's declaration** instead of inferring authority
+  from token contents. `ISchemeClaimAuthorityMap` is resolved optionally, so a host that
+  registers no map behaves exactly as before. With one registered: a `SubjectKind.Machine`
+  scheme never consults the application-user store (a machine's roles travel on the credential
+  record the handler minted them from — a third source neither `ClaimAuthority` pole names),
+  and a scheme declaring `ClaimAuthority.IdentityProvider` for roles keeps the roles its token
+  issued. New telemetry outcomes `machine-subject` and `identity-provider-roles` name both.
+- **Server-side canonicalization of `custom*` claims** at claims transformation, excluding
+  roles (`CustomClaimCanonicalizer.Canonicalize(identity, excludeRoles: true)`). App-minted
+  profile claims now reach the native names the framework reads — the server-side half of the
+  fix for an audit line naming the calling application as the user. Minted roles are
+  deliberately not aliased: materializing a token's role snapshot as a live role claim would
+  let `IsInRole` answer from data frozen at token issue.
+
+### Changed
+
+- **`connection.Promote` requires the origin scheme:**
+  `Promote(ClaimsPrincipal principal, string? originScheme)` is now the only signature — the
+  one-argument overload is gone rather than retained as a default. Attribution is declared,
+  not defaulted: a surviving one-argument form would let every call site quietly not answer,
+  leaving an operator unable to distinguish "genuinely unattributable" from "nobody stated
+  it". The parameter stays nullable — an unattributed promotion is legal and resolves
+  `SubjectKind.Unknown`, degraded rather than wrong — and null or blank now *clears* any prior
+  origin stamp, so a re-promotion can never pair the previous subject's origin with the new
+  subject. Removing a public overload is breaking on paper; shipped in a Minor deliberately,
+  consistent with the rest of this wave's pre-adoption surface changes.
+  Find/replace: `Promote(principal)` → `Promote(principal, originScheme: null)`.
+- **`RegisterAuthenticationProvider` takes `IAuthenticationBuilder`** (was ASP.NET's
+  `AuthenticationBuilder`), and calls the consolidated two-argument
+  `AuthenticationProviderRegistrar.Register`. Registrar plumbing that follows
+  `Cirreum.AuthenticationProvider` 3.x; breaking on paper, deliberate in a Minor.
+- **Role resolution keys on the effective scheme** — the origin scheme when a continuation or
+  a promotion established the subject elsewhere, otherwise the stamped transport scheme. A
+  subject reaching the server over a session ticket resolves through the scheme that
+  established it, not the ticket that re-presents it.
+- **`ContainsRoles` is deleted.** The presence of role claims on the principal no longer
+  suppresses the application-store read. That inference was the wave's root defect: a token
+  carrying roles is exactly the case a store-owns scheme must re-read, since suppressing it
+  trades per-request roles for a snapshot bounded only by the token's refresh window.
+  Behavioral change for a scheme that declares nothing and has a resolver registered: the
+  resolver is now consulted on every request rather than skipped when the token already
+  carried roles. `AuthenticationTelemetry.OutcomeRolesAlreadyPresent` is removed with it — no
+  code path can produce that outcome any longer.
+
+### Updated
+
+- Updated NuGet packages (`Cirreum.AuthenticationProvider` 3.0.4, carrying `Cirreum.Kernel`
+  2.2.0's `excludeRoles` canonicalization posture).
 
 ## [2.0.3] - 2026-08-04
 

@@ -5,11 +5,11 @@ using Cirreum.Authentication;
 using Cirreum.Invocation.Connections;
 
 /// <summary>
-/// Tests for the <c>connection.Promote(principal)</c> extension member — the Two-Phase
-/// Auth write surface. Locks the promotion invariants: authenticated-principal
-/// validation, the evict-<c>ApplicationUserCache</c>-BEFORE-stamp ordering (a
-/// concurrently-constructed invocation must never observe the promoted principal paired
-/// with the previous identity's cached application user), scheme survival, and
+/// Tests for the <c>connection.Promote(principal, originScheme)</c> extension member — the
+/// Two-Phase Auth write surface. Locks the promotion invariants: authenticated-principal
+/// validation, the clear-derived-slots-BEFORE-stamp ordering (a concurrently-constructed
+/// invocation must never observe the promoted principal paired with the previous subject's
+/// cached application user or origin), origin stamping and clearing, scheme survival, and
 /// re-promotion overwrite semantics.
 /// </summary>
 public class TwoPhaseAuthTests {
@@ -34,12 +34,33 @@ public class TwoPhaseAuthTests {
 		var connection = ConnectionWith(items);
 		var principal = AuthenticatedPrincipal();
 
-		connection.Promote(principal);
+		connection.Promote(principal, originScheme: "entraExternal");
 
 		items[AuthenticationContextKeys.PromotedPrincipal].Should().BeSameAs(principal);
+		items[AuthenticationContextKeys.OriginScheme].Should().Be("entraExternal");
 		connection.PromotedUser.Should().BeSameAs(principal);
 		connection.EffectiveUser.Should().BeSameAs(principal);
 		connection.IsUserPromoted.Should().BeTrue();
+	}
+
+	[Fact]
+	public void Promote_NullOrigin_LeavesTheOriginSlotAbsent() {
+		var items = new Dictionary<object, object?>();
+		var connection = ConnectionWith(items);
+
+		connection.Promote(AuthenticatedPrincipal(), originScheme: null);
+
+		items.Should().NotContainKey(AuthenticationContextKeys.OriginScheme);
+	}
+
+	[Fact]
+	public void Promote_BlankOrigin_IsTreatedAsNull() {
+		var items = new Dictionary<object, object?>();
+		var connection = ConnectionWith(items);
+
+		connection.Promote(AuthenticatedPrincipal(), originScheme: "   ");
+
+		items.Should().NotContainKey(AuthenticationContextKeys.OriginScheme);
 	}
 
 	[Fact]
@@ -49,24 +70,30 @@ public class TwoPhaseAuthTests {
 		};
 		var connection = ConnectionWith(items);
 
-		connection.Promote(AuthenticatedPrincipal());
+		connection.Promote(AuthenticatedPrincipal(), originScheme: null);
 
 		items.Should().NotContainKey(AuthenticationContextKeys.ApplicationUserCache);
 	}
 
 	[Fact]
-	public void Promote_EvictsCache_BeforeStampingPrincipal() {
+	public void Promote_ClearsDerivedSlots_BeforeStampingPrincipal_AndStampsOriginLast() {
 		var items = new RecordingDictionary {
 			[AuthenticationContextKeys.ApplicationUserCache] = new object(),
+			[AuthenticationContextKeys.OriginScheme] = "descope",
 		};
 		items.Operations.Clear();
 		var connection = ConnectionWith(items);
 
-		connection.Promote(AuthenticatedPrincipal());
+		connection.Promote(AuthenticatedPrincipal(), originScheme: "entraExternal");
 
+		// Clear both derived slots, stamp the principal, then the origin: a concurrent
+		// reader sees the old subject complete, either principal with derived slots absent
+		// (degraded, never wrong), or the new subject complete — never a cross-pairing.
 		items.Operations.Should().ContainInOrder(
 			$"remove:{AuthenticationContextKeys.ApplicationUserCache}",
-			$"set:{AuthenticationContextKeys.PromotedPrincipal}");
+			$"remove:{AuthenticationContextKeys.OriginScheme}",
+			$"set:{AuthenticationContextKeys.PromotedPrincipal}",
+			$"set:{AuthenticationContextKeys.OriginScheme}");
 	}
 
 	[Fact]
@@ -74,14 +101,16 @@ public class TwoPhaseAuthTests {
 		var cached = new object();
 		var items = new Dictionary<object, object?> {
 			[AuthenticationContextKeys.ApplicationUserCache] = cached,
+			[AuthenticationContextKeys.OriginScheme] = "descope",
 		};
 		var connection = ConnectionWith(items);
 
-		var act = () => connection.Promote(AnonymousPrincipal());
+		var act = () => connection.Promote(AnonymousPrincipal(), originScheme: "entraExternal");
 
 		act.Should().Throw<ArgumentException>();
-		// Validation precedes mutation — a rejected Promote must not evict the cache.
+		// Validation precedes mutation — a rejected Promote must not disturb the subject.
 		items[AuthenticationContextKeys.ApplicationUserCache].Should().BeSameAs(cached);
+		items[AuthenticationContextKeys.OriginScheme].Should().Be("descope");
 		items.Should().NotContainKey(AuthenticationContextKeys.PromotedPrincipal);
 	}
 
@@ -89,7 +118,7 @@ public class TwoPhaseAuthTests {
 	public void Promote_NullPrincipal_ThrowsArgumentNull() {
 		var connection = ConnectionWith(new Dictionary<object, object?>());
 
-		var act = () => connection.Promote(null!);
+		var act = () => connection.Promote(null!, originScheme: null);
 
 		act.Should().Throw<ArgumentNullException>();
 	}
@@ -98,7 +127,7 @@ public class TwoPhaseAuthTests {
 	public void Promote_NullConnection_ThrowsArgumentNull() {
 		IInvocationConnection connection = null!;
 
-		var act = () => connection.Promote(AuthenticatedPrincipal());
+		var act = () => connection.Promote(AuthenticatedPrincipal(), originScheme: null);
 
 		act.Should().Throw<ArgumentNullException>();
 	}
@@ -110,12 +139,36 @@ public class TwoPhaseAuthTests {
 		var first = AuthenticatedPrincipal("user-1");
 		var second = AuthenticatedPrincipal("user-2");
 
-		connection.Promote(first);
+		connection.Promote(first, originScheme: null);
 		items[AuthenticationContextKeys.ApplicationUserCache] = new object();
-		connection.Promote(second);
+		connection.Promote(second, originScheme: null);
 
 		connection.PromotedUser.Should().BeSameAs(second);
 		items.Should().NotContainKey(AuthenticationContextKeys.ApplicationUserCache);
+	}
+
+	[Fact]
+	public void Promote_RePromotion_ReplacesThePriorOrigin() {
+		var items = new Dictionary<object, object?>();
+		var connection = ConnectionWith(items);
+
+		connection.Promote(AuthenticatedPrincipal("user-1"), originScheme: "descope");
+		connection.Promote(AuthenticatedPrincipal("user-2"), originScheme: "entraExternal");
+
+		items[AuthenticationContextKeys.OriginScheme].Should().Be("entraExternal");
+	}
+
+	[Fact]
+	public void Promote_RePromotion_ClearsThePriorOrigin_WhenUnattributed() {
+		var items = new Dictionary<object, object?>();
+		var connection = ConnectionWith(items);
+
+		connection.Promote(AuthenticatedPrincipal("user-1"), originScheme: "descope");
+		connection.Promote(AuthenticatedPrincipal("user-2"), originScheme: null);
+
+		// The previous subject's origin must never pair with the new subject: an
+		// unattributed re-promotion clears the slot rather than inheriting it.
+		items.Should().NotContainKey(AuthenticationContextKeys.OriginScheme);
 	}
 
 	[Fact]
@@ -125,7 +178,7 @@ public class TwoPhaseAuthTests {
 		};
 		var connection = ConnectionWith(items);
 
-		connection.Promote(AuthenticatedPrincipal());
+		connection.Promote(AuthenticatedPrincipal(), originScheme: "entraExternal");
 
 		// The scheme describes how the CONNECTION (transport) was authenticated,
 		// not the current occupant — promotion must not disturb it.

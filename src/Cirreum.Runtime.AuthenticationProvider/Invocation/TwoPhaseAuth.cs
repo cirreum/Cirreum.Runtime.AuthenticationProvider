@@ -1,15 +1,17 @@
-namespace Cirreum.Invocation.Connections;
+﻿namespace Cirreum.Invocation.Connections;
 
 using Cirreum.Authentication;
+using Cirreum.Security;
 using System.Security.Claims;
 
 /// <summary>
 /// Spine-shipped write surface for the Two-Phase Auth pattern —
 /// promotes a long-lived connection that started anonymous-pending-auth into an
-/// authenticated state mid-flight via <c>connection.Promote(principal)</c>, stamping the
-/// <see cref="ClaimsPrincipal"/> into the connection's
+/// authenticated state mid-flight via <c>connection.Promote(principal, originScheme)</c>,
+/// stamping the <see cref="ClaimsPrincipal"/> into the connection's
 /// <see cref="IInvocationConnection.Items"/> under
-/// <see cref="AuthenticationContextKeys.PromotedPrincipal"/>.
+/// <see cref="AuthenticationContextKeys.PromotedPrincipal"/>, and the scheme that
+/// established it under <see cref="AuthenticationContextKeys.OriginScheme"/>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -40,20 +42,21 @@ public static class TwoPhaseAuth {
 
 		/// <summary>
 		/// Promotes the connection by stamping the authenticated principal into
-		/// <see cref="IInvocationConnection.Items"/>. Replaces any prior promoted principal
-		/// (re-promotion is supported — apps that re-authenticate mid-connection overwrite
-		/// the prior promoted state).
+		/// <see cref="IInvocationConnection.Items"/>, together with the scheme that
+		/// established it. Replaces any prior promoted state (re-promotion is supported —
+		/// apps that re-authenticate mid-connection overwrite the prior promoted state,
+		/// including its origin).
 		/// </summary>
 		/// <remarks>
 		/// <para>
 		/// Also evicts any cached application user
-		/// (<see cref="AuthenticationContextKeys.ApplicationUserCache"/>) from the
-		/// connection — it was resolved for the pre-promotion identity. The eviction
-		/// happens <em>before</em> the promoted principal is stamped: an invocation
-		/// constructed concurrently may observe the old principal with the old (matching)
-		/// cache, or either value briefly absent, but never the promoted principal paired
-		/// with the previous identity's application user. The lazy resolve path repopulates
-		/// the slot for the promoted identity on the next invocation.
+		/// (<see cref="AuthenticationContextKeys.ApplicationUserCache"/>) and any prior
+		/// origin stamp from the connection — both belong to the pre-promotion subject. The
+		/// clearing happens <em>before</em> the promoted principal is stamped: an invocation
+		/// constructed concurrently may observe the old subject complete, or either principal
+		/// with the derived slots absent, but never the promoted principal paired with the
+		/// previous subject's cached user or origin. The lazy resolve path repopulates the
+		/// application-user slot for the promoted identity on the next invocation.
 		/// </para>
 		/// <para>
 		/// <see cref="AuthenticationContextKeys.AuthenticatedScheme"/> deliberately
@@ -65,11 +68,16 @@ public static class TwoPhaseAuth {
 		/// Must carry a valid identity (<see cref="ClaimsPrincipal.Identity"/>.IsAuthenticated
 		/// is <see langword="true"/>). Throws on anonymous principals — use the connection's
 		/// existing <see cref="IInvocationConnection.User"/> for unauthenticated state.</param>
+		/// <param name="originScheme">The name of the authentication scheme that established
+		/// <paramref name="principal"/>, stamped as
+		/// <see cref="AuthenticationContextKeys.OriginScheme"/>. <see langword="null"/> or
+		/// blank records an unattributed promotion: the origin slot is cleared and the
+		/// subject resolves <see cref="SubjectKind.Unknown"/>.</param>
 		/// <exception cref="ArgumentNullException">When the connection or
 		/// <paramref name="principal"/> is <see langword="null"/>.</exception>
 		/// <exception cref="ArgumentException">When <paramref name="principal"/> is
 		/// unauthenticated.</exception>
-		public void Promote(ClaimsPrincipal principal) {
+		public void Promote(ClaimsPrincipal principal, string? originScheme) {
 			ArgumentNullException.ThrowIfNull(connection);
 			ArgumentNullException.ThrowIfNull(principal);
 			if (principal.Identity?.IsAuthenticated != true) {
@@ -79,12 +87,14 @@ public static class TwoPhaseAuth {
 					nameof(principal));
 			}
 
-			// Evict BEFORE stamping — order matters. A concurrently-constructed invocation
-			// seeds its auth slots from Connection.Items; evict-then-stamp means it can see
-			// old-principal + old-cache, old-principal + no-cache, or new-principal +
-			// no-cache, but never new-principal + the previous identity's cached user.
-			// See Services.Server: UserStateAccessor where its re-hydrated on demand.
+			// Clear BEFORE stamping — order matters. A concurrently-constructed invocation
+			// seeds its auth slots from Connection.Items; clear-then-stamp means it can see
+			// the old subject complete, or either principal with the derived slots absent
+			// (which resolves Unknown — degraded, never wrong), but never the new principal
+			// paired with the previous subject's cached user or origin.
+			// See Services.Server: UserStateAccessor, where the cache re-hydrates on demand.
 			connection.Items.Remove(AuthenticationContextKeys.ApplicationUserCache);
+			connection.Items.Remove(AuthenticationContextKeys.OriginScheme);
 
 			// Stamp the promoted principal into the connection's items bag. The framework
 			// connection-terminator handler (in Cirreum.Services.Server) honors promotion when
@@ -92,6 +102,13 @@ public static class TwoPhaseAuth {
 			// incoming CredentialRevoked, UserAccountDisabled, or SessionTerminationRequested
 			// event is aborted as expected.
 			connection.Items[AuthenticationContextKeys.PromotedPrincipal] = principal;
+
+			// Origin last: a reader that has already seen the promoted principal reads either
+			// no origin (resolves Unknown) or the correct one — never the previous subject's.
+			// A blank origin stays cleared: the promotion is deliberately unattributed.
+			if (!string.IsNullOrWhiteSpace(originScheme)) {
+				connection.Items[AuthenticationContextKeys.OriginScheme] = originScheme;
+			}
 		}
 
 	}

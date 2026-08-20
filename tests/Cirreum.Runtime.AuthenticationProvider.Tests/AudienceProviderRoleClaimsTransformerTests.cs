@@ -1,9 +1,10 @@
-namespace Cirreum.Runtime.Authentication.Tests;
+﻿namespace Cirreum.Runtime.Authentication.Tests;
 
 using System.Security.Claims;
 using Cirreum;
 using Cirreum.Authentication;
 using Cirreum.AuthenticationProvider;
+using Cirreum.Security;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -39,10 +40,27 @@ public class AudienceProviderRoleClaimsTransformerTests {
 	}
 
 	private static AudienceProviderRoleClaimsTransformer TransformerFor(
-		HttpContext context, params IApplicationUserResolver[] resolvers) {
+		HttpContext context, params IApplicationUserResolver[] resolvers) =>
+		TransformerFor(context, authorityMap: null, resolvers);
+
+	private static AudienceProviderRoleClaimsTransformer TransformerFor(
+		HttpContext context,
+		ISchemeClaimAuthorityMap? authorityMap,
+		params IApplicationUserResolver[] resolvers) {
 		var accessor = Substitute.For<IHttpContextAccessor>();
 		accessor.HttpContext.Returns(context);
-		return new(resolvers, accessor, NullLogger<AudienceProviderRoleClaimsTransformer>.Instance);
+		return new(resolvers, accessor, NullLogger<AudienceProviderRoleClaimsTransformer>.Instance, authorityMap);
+	}
+
+	/// <summary>A map declaring one scheme; every other scheme resolves Undeclared.</summary>
+	private static ISchemeClaimAuthorityMap MapFor(
+		string scheme,
+		SubjectKind subjectKind = SubjectKind.Human,
+		ClaimAuthority roles = ClaimAuthority.Unspecified) {
+		var map = Substitute.For<ISchemeClaimAuthorityMap>();
+		map.Get(Arg.Any<string?>()).Returns(SchemeClaimAuthority.Undeclared);
+		map.Get(scheme).Returns(new SchemeClaimAuthority(subjectKind, ClaimAuthority.Unspecified, roles));
+		return map;
 	}
 
 	private static ClaimsTransformResult Result(HttpContext context) =>
@@ -146,22 +164,23 @@ public class AudienceProviderRoleClaimsTransformerTests {
 	}
 
 	[Fact]
-	public async Task TransformAsync_RolesOnSecondaryIdentity_ShortCircuits() {
-		// Roles are the one aggregate: IsInRole already spans every identity, so a role on a
-		// secondary identity is one the principal genuinely answers to. Adding application
-		// roles on top would fight an IdP whose roles are already in effect.
+	public async Task TransformAsync_RolesOnSecondaryIdentity_NoLongerSuppressesTheStore() {
+		// The deleted ContainsRoles short-circuit: role claims anywhere on the principal used
+		// to suppress the resolver. A DB-owns scheme must re-read the store on every request —
+		// suppressing it is precisely how revocation stopped being immediate.
 		var context = new DefaultHttpContext();
 		context.Items[AuthenticationContextKeys.AuthenticatedScheme] = "descope";
-		var resolver = ResolverFor("descope", "shadowed");
+		var resolver = ResolverFor("descope", "current");
 		var transformer = TransformerFor(context, resolver);
 
 		var principal = JwtPrincipal();
 		principal.AddIdentity(new ClaimsIdentity([new Claim(ClaimTypes.Role, "operator")], "secondary"));
 
-		await transformer.TransformAsync(principal);
+		var transformed = await transformer.TransformAsync(principal);
 
-		Result(context).Outcome.Should().Be(AuthenticationTelemetry.OutcomeRolesAlreadyPresent);
-		await resolver.DidNotReceive().ResolveAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+		Result(context).Outcome.Should().Be(AuthenticationTelemetry.OutcomeRolesResolved);
+		await resolver.Received(1).ResolveAsync("user-1", Arg.Any<CancellationToken>());
+		transformed.IsInRole("current").Should().BeTrue();
 	}
 
 	[Fact]
@@ -247,18 +266,102 @@ public class AudienceProviderRoleClaimsTransformerTests {
 	}
 
 	[Fact]
-	public async Task TransformAsync_RolesAlreadyPresent_ShortCircuitsBeforeDispatch() {
-		// Workforce path: IdP-issued roles arrive in the token; the transformer must
-		// not fight them — and the resolver must never be consulted.
+	public async Task TransformAsync_IdentityProviderRoles_ShortCircuitsBeforeDispatch() {
+		// Workforce path, now declared rather than inferred: the IdP owns roles, so the token's
+		// roles stand and the store is never consulted — even with a resolver registered.
 		var context = new DefaultHttpContext();
 		context.Items[AuthenticationContextKeys.AuthenticatedScheme] = "entraWorkforce";
 		var resolver = ResolverFor("entraWorkforce", "shadowed");
-		var transformer = TransformerFor(context, resolver);
+		var map = MapFor("entraWorkforce", roles: ClaimAuthority.IdentityProvider);
+		var transformer = TransformerFor(context, map, resolver);
 
-		await transformer.TransformAsync(JwtPrincipal(role: "operator"));
+		var transformed = await transformer.TransformAsync(JwtPrincipal(role: "operator"));
 
-		Result(context).Outcome.Should().Be(AuthenticationTelemetry.OutcomeRolesAlreadyPresent);
+		Result(context).Outcome.Should().Be(AuthenticationTelemetry.OutcomeIdentityProviderRoles);
 		await resolver.DidNotReceive().ResolveAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+		transformed.IsInRole("operator").Should().BeTrue();
+		transformed.IsInRole("shadowed").Should().BeFalse();
+	}
+
+	[Fact]
+	public async Task TransformAsync_MachineSubject_NeverConsultsTheApplicationStore() {
+		// A machine's roles travel on the credential record the handler minted them from —
+		// a third source neither ClaimAuthority pole names.
+		var context = new DefaultHttpContext();
+		context.Items[AuthenticationContextKeys.AuthenticatedScheme] = "ApiKey:Header";
+		var resolver = ResolverFor("ApiKey:Header", "shadowed");
+		var map = MapFor("ApiKey:Header", subjectKind: SubjectKind.Machine);
+		var transformer = TransformerFor(context, map, resolver);
+
+		await transformer.TransformAsync(JwtPrincipal(role: "integration"));
+
+		Result(context).Outcome.Should().Be(AuthenticationTelemetry.OutcomeMachineSubject);
+		await resolver.DidNotReceive().ResolveAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+	}
+
+	[Fact]
+	public async Task TransformAsync_ApplicationStoreRoles_ReReadsDespiteTokenRoles() {
+		// The declared form of the same correctness rule: the store is authoritative, so a
+		// token that already carries roles does not suppress the per-request read.
+		var context = new DefaultHttpContext();
+		context.Items[AuthenticationContextKeys.AuthenticatedScheme] = "descope";
+		var resolver = ResolverFor("descope", "current");
+		var map = MapFor("descope", roles: ClaimAuthority.ApplicationStore);
+		var transformer = TransformerFor(context, map, resolver);
+
+		var transformed = await transformer.TransformAsync(JwtPrincipal(role: "stale"));
+
+		Result(context).Outcome.Should().Be(AuthenticationTelemetry.OutcomeRolesResolved);
+		await resolver.Received(1).ResolveAsync("user-1", Arg.Any<CancellationToken>());
+		transformed.IsInRole("current").Should().BeTrue();
+	}
+
+	[Fact]
+	public async Task TransformAsync_OriginScheme_GovernsDispatchAndDeclaration() {
+		// A ticketed connection: the transport is SessionTicket, but descope established the
+		// subject — descope's resolver and descope's declaration are the ones that apply.
+		var context = new DefaultHttpContext();
+		context.Items[AuthenticationContextKeys.AuthenticatedScheme] = "SessionTicket:Bearer";
+		context.Items[AuthenticationContextKeys.OriginScheme] = "descope";
+		var originResolver = ResolverFor("descope", "subscriber");
+		var transportResolver = ResolverFor("SessionTicket:Bearer", "wrong");
+		var map = MapFor("descope", roles: ClaimAuthority.ApplicationStore);
+		var transformer = TransformerFor(context, map, originResolver, transportResolver);
+
+		var transformed = await transformer.TransformAsync(JwtPrincipal());
+
+		await originResolver.Received(1).ResolveAsync("user-1", Arg.Any<CancellationToken>());
+		await transportResolver.DidNotReceive().ResolveAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+		transformed.IsInRole("subscriber").Should().BeTrue();
+		Result(context).Scheme.Should().Be("descope");
+	}
+
+	[Fact]
+	public async Task TransformAsync_CanonicalizesProfileClaims_ButNeverMintedRoles() {
+		// The wave's root-cause fix on the server side: customName reaches the name claim, so
+		// audit and profile stop reading a machine-ish blank. customRoles is deliberately left
+		// as inert wire bytes — materializing it would answer IsInRole from a token snapshot.
+		var context = new DefaultHttpContext();
+		context.Items[AuthenticationContextKeys.AuthenticatedScheme] = "descope";
+		var transformer = TransformerFor(context, ResolverFor("descope", "current"));
+
+		var identity = new ClaimsIdentity(
+			[
+				new Claim("sub", "user-1"),
+				new Claim("customName", "Jane Smith"),
+				new Claim("customRoles", """["stale-admin"]"""),
+			],
+			FederationAuthenticationType,
+			nameType: "name",
+			roleType: ClaimTypes.Role);
+
+		var transformed = await transformer.TransformAsync(new ClaimsPrincipal(identity));
+
+		transformed.Identity!.Name.Should().Be("Jane Smith");
+		transformed.IsInRole("stale-admin").Should().BeFalse();
+		transformed.IsInRole("current").Should().BeTrue();
+		// Additive: the wire claim survives, it is simply never evaluated.
+		identity.FindAll("customRoles").Should().ContainSingle();
 	}
 
 }

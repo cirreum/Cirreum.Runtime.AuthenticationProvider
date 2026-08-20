@@ -4,7 +4,6 @@ using Cirreum.AuthenticationProvider;
 using Cirreum.AuthenticationProvider.Configuration;
 using Cirreum.Logging.Deferred;
 using Cirreum.Providers;
-using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -54,7 +53,7 @@ public static class HostApplicationBuilderExtensions {
 	/// </remarks>
 	public static IHostApplicationBuilder RegisterAuthenticationProvider<TRegistrar, TSettings, TInstanceSettings>(
 		this IHostApplicationBuilder builder,
-		AuthenticationBuilder authBuilder,
+		IAuthenticationBuilder authBuilder,
 		bool required = false)
 		where TRegistrar : AuthenticationProviderRegistrar<TSettings, TInstanceSettings>, new()
 		where TSettings : AuthenticationProviderSettings<TInstanceSettings>
@@ -104,8 +103,6 @@ public static class HostApplicationBuilderExtensions {
 			// handling the empty-Instances case appropriately.
 			registrar.Register(
 				providerSettings,
-				builder.Services,
-				builder.Configuration,
 				authBuilder);
 
 			deferredLogger.LogDebug(

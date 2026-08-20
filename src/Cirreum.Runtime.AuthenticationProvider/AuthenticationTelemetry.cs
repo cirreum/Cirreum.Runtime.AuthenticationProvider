@@ -1,4 +1,4 @@
-namespace Cirreum.AuthenticationProvider;
+﻿namespace Cirreum.AuthenticationProvider;
 
 using Cirreum.Diagnostics;
 using System.Diagnostics;
@@ -44,8 +44,11 @@ public static class AuthenticationTelemetry {
 	/// <summary>Outcome: no <see cref="IApplicationUserResolver"/> matched the request's scheme, and no null-scheme fallback was registered.</summary>
 	public const string OutcomeNoResolver = "no-resolver";
 
-	/// <summary>Outcome: the principal already carried role claims, so the resolver was not consulted.</summary>
-	public const string OutcomeRolesAlreadyPresent = "roles-already-present";
+	/// <summary>Outcome: the scheme declares a machine subject, whose roles travel on the credential record.</summary>
+	public const string OutcomeMachineSubject = "machine-subject";
+
+	/// <summary>Outcome: the scheme declares the identity provider authoritative for roles, so the store was not consulted.</summary>
+	public const string OutcomeIdentityProviderRoles = "identity-provider-roles";
 
 	/// <summary>Outcome: no supported user-identifier claim was present on the principal.</summary>
 	public const string OutcomeNoUserIdentifier = "no-user-identifier";

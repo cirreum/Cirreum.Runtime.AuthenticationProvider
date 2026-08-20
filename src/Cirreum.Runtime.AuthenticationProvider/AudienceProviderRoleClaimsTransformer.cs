@@ -1,4 +1,4 @@
-namespace Cirreum.AuthenticationProvider;
+﻿namespace Cirreum.AuthenticationProvider;
 
 using Cirreum;
 using Cirreum.Authentication;
@@ -28,21 +28,30 @@ using System.Security.Claims;
 /// <see cref="IApplicationUserResolver.Scheme"/> is <see langword="null"/>.
 /// </para>
 /// <para>
-/// When no resolver is registered for the current scheme (and no null-scheme fallback
-/// exists), the transformer is a no-op. This is the correct behavior for workforce-only
-/// apps where roles arrive in the JWT directly — the framework-shipped
-/// transformer doesn't fight the IdP's roles claim.
+/// Whether the application store is consulted at all is the scheme's declaration, read from
+/// <see cref="ISchemeClaimAuthorityMap"/>: a machine subject carries its roles on the
+/// credential record, an <see cref="ClaimAuthority.IdentityProvider"/> scheme keeps the
+/// roles its token issued, and an <see cref="ClaimAuthority.ApplicationStore"/> scheme
+/// resolves them per request so revocation takes effect immediately. A scheme that declares
+/// nothing — and a host that registers no map at all — falls back to the resolver-presence
+/// rule: a registered resolver means the store owns roles.
+/// </para>
+/// <para>
+/// Profile claims minted under the <c>custom*</c> convention are canonicalized here, before
+/// any of that: the server aliases them to their native names so the rest of the framework
+/// reads app-owned identity facts. Roles are deliberately excluded from the aliasing —
+/// materializing a minted role snapshot as a live role claim would answer
+/// <see cref="ClaimsPrincipal.IsInRole(string)"/> from data frozen at token issue.
 /// </para>
 /// </remarks>
 internal sealed partial class AudienceProviderRoleClaimsTransformer(
 	IEnumerable<IApplicationUserResolver> resolvers,
 	IHttpContextAccessor httpContextAccessor,
-	ILogger<AudienceProviderRoleClaimsTransformer> logger
+	ILogger<AudienceProviderRoleClaimsTransformer> logger,
+	ISchemeClaimAuthorityMap? authorityMap = null
 ) : IClaimsTransformation {
 
 	private const string TransformedKey = "__Cirreum_AudienceProviderRoleClaimsTransformer";
-	private const string RolesName = "roles";
-	private const string RoleName = "role";
 
 	private readonly IApplicationUserResolver[] _resolvers = [.. resolvers];
 
@@ -70,6 +79,10 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 		// a malformed identity is unattributable to the IdP that caused it.
 		var stampedScheme = context.Items[AuthenticationContextKeys.AuthenticatedScheme] as string;
 
+		// The origin stamp, when a continuation scheme (a session ticket) established the
+		// subject through another scheme. Its declaration — not the transport's — governs.
+		var originScheme = context.Items[AuthenticationContextKeys.OriginScheme] as string;
+
 		if (context.Items.ContainsKey(TransformedKey)) {
 			Log.AlreadyTransformed(logger);
 			return Complete(principal, context, activity, startedAt,
@@ -91,13 +104,53 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 		// forward selector's value when both run.
 		context.Items.TryAdd(AuthenticationContextKeys.AuthenticatedScheme, identity.AuthenticationType);
 
-		// Dispatch on the slot, not on AuthenticationType: JWT identities carry the token
-		// handler's fixed "AuthenticationTypes.Federation" label rather than a scheme name,
-		// so only the forward selector's stamp identifies which scheme authenticated.
-		var scheme = stampedScheme ?? identity.AuthenticationType;
+		// Alias app-minted profile claims to the names the framework reads, before anything
+		// consumes an identity fact — ClaimsHelper.ResolveId below, and profile enrichment
+		// downstream. Roles are excluded: on the server they are produced from the scheme's
+		// authoritative source per request, and materializing the token's minted snapshot as a
+		// live role claim would let IsInRole answer from data frozen at token issue.
+		CustomClaimCanonicalizer.Canonicalize(identity, excludeRoles: true);
+
+		// Dispatch on the effective scheme — the origin when a continuation or a promotion
+		// established the subject elsewhere, else the stamped transport scheme. Never on
+		// AuthenticationType: JWT identities carry the token handler's fixed
+		// "AuthenticationTypes.Federation" label rather than a scheme name, so only the
+		// stamp identifies which scheme authenticated.
+		var scheme = originScheme ?? stampedScheme ?? identity.AuthenticationType;
+		var roleClaimType = identity.RoleClaimType;
+
+		// The scheme's declaration decides who owns roles. Resolved optionally: with no
+		// registered map every scheme is Undeclared, and the legacy resolver-presence rule
+		// below applies unchanged.
+		var declaration = authorityMap?.Get(scheme) ?? SchemeClaimAuthority.Undeclared;
+
+		// A machine subject's roles travel on the credential record the handler already
+		// minted them from — a third source neither ClaimAuthority pole names — so the
+		// application-user store is not consulted for one.
+		if (declaration.SubjectKind is SubjectKind.Machine) {
+			Log.MachineSubject(logger, scheme ?? "(null)");
+			return Complete(principal, context, activity, startedAt,
+				AuthenticationTelemetry.OutcomeMachineSubject, scheme: scheme, roleClaimType: roleClaimType);
+		}
+
+		// The identity provider is declared authoritative: the roles its token issued stand,
+		// and the store is never consulted. This is the declared form of what resolver
+		// absence used to imply.
+		if (declaration.Roles is ClaimAuthority.IdentityProvider) {
+			Log.IdentityProviderRoles(logger, scheme ?? "(null)");
+			return Complete(principal, context, activity, startedAt,
+				AuthenticationTelemetry.OutcomeIdentityProviderRoles, scheme: scheme, roleClaimType: roleClaimType);
+		}
 
 		// Per-scheme dispatch over IApplicationUserResolver. Falls back to the
 		// resolver whose Scheme is null when no per-scheme resolver matches.
+		//
+		// Reached under ApplicationStore (the store is declared authoritative) and under
+		// Unspecified (the legacy rule: a registered resolver means the store owns roles,
+		// its absence means the token does). Under both, the store is now read on every
+		// request — the presence of role claims on the principal no longer suppresses it,
+		// since a token that carries roles is exactly the case a DB-owns scheme must
+		// re-read to keep revocation immediate.
 		var resolver = this.SelectResolver(scheme);
 
 		if (resolver is null) {
@@ -107,18 +160,6 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 		}
 
 		var resolverType = resolver.GetType().Name;
-
-		// Skip when the principal already carries role claims (workforce IdP path). Roles are
-		// the one aggregate here, so the check spans every identity — the breadth
-		// ClaimsPrincipal.IsInRole already has. A role on a secondary identity is one the
-		// principal genuinely answers to, so adding application-store roles on top would be
-		// fighting an IdP whose roles are already in effect.
-		var roleClaimType = identity.RoleClaimType;
-		if (ContainsRoles(principal)) {
-			Log.RolesAlreadyPresent(logger, roleClaimType);
-			return Complete(principal, context, activity, startedAt,
-				AuthenticationTelemetry.OutcomeRolesAlreadyPresent, resolverType, scheme, roleClaimType: roleClaimType);
-		}
 
 		// Singular fact — resolved from the primary identity or not at all, via the Kernel
 		// resolver rather than a second copy of its claim order. `identity` is
@@ -213,33 +254,6 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 	}
 
 	/// <summary>
-	/// Whether any identity the principal carries already holds a role claim. Each identity is
-	/// read against its own <see cref="ClaimsIdentity.RoleClaimType"/>, matching how
-	/// <see cref="ClaimsPrincipal.IsInRole(string)"/> spans a multi-identity principal, and
-	/// allocation-free with an early exit.
-	/// </summary>
-	private static bool ContainsRoles(ClaimsPrincipal principal) {
-		foreach (var identity in principal.Identities) {
-			if (ContainsRoles(identity, identity.RoleClaimType)) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	private static bool ContainsRoles(ClaimsIdentity identity, string roleType) {
-		foreach (var c in identity.Claims) {
-			var t = c.Type;
-			if (string.Equals(t, roleType, StringComparison.OrdinalIgnoreCase) ||
-				string.Equals(t, RolesName, StringComparison.OrdinalIgnoreCase) ||
-				string.Equals(t, RoleName, StringComparison.OrdinalIgnoreCase)) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	/// <summary>
 	/// The single exit path: records telemetry and stashes the diagnostic result. Every
 	/// outcome routes through here so a future branch cannot record one instrument and
 	/// forget the other.
@@ -276,8 +290,11 @@ internal sealed partial class AudienceProviderRoleClaimsTransformer(
 		[LoggerMessage(EventId = 1002, Level = LogLevel.Debug, Message = "Claims transformation skipped because the principal identity was not a ClaimsIdentity.")]
 		public static partial void NoClaimsIdentity(ILogger logger);
 
-		[LoggerMessage(EventId = 1003, Level = LogLevel.Debug, Message = "Claims transformation skipped because role claims already exist. RoleClaimType: {RoleClaimType}")]
-		public static partial void RolesAlreadyPresent(ILogger logger, string roleClaimType);
+		[LoggerMessage(EventId = 1003, Level = LogLevel.Debug, Message = "Claims transformation skipped because scheme '{Scheme}' declares a machine subject, whose roles travel on the credential record.")]
+		public static partial void MachineSubject(ILogger logger, string scheme);
+
+		[LoggerMessage(EventId = 1012, Level = LogLevel.Debug, Message = "Claims transformation skipped because scheme '{Scheme}' declares the identity provider authoritative for roles.")]
+		public static partial void IdentityProviderRoles(ILogger logger, string scheme);
 
 		[LoggerMessage(EventId = 1004, Level = LogLevel.Debug, Message = "Claims transformation skipped because no supported user identifier claim was found.")]
 		public static partial void NoUserIdentifier(ILogger logger);
