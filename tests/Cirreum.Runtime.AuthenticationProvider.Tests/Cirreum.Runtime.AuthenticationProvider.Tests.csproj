@@ -19,14 +19,14 @@
 			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
 			<PrivateAssets>all</PrivateAssets>
 		</PackageReference>
-		<PackageReference Include="FluentAssertions" Version="8.10.0" />
+		<PackageReference Include="AwesomeAssertions" Version="9.6.0" />
 		<PackageReference Include="NSubstitute" Version="6.2.0" />
 		<PackageReference Include="Microsoft.AspNetCore.TestHost" Version="10.0.11" />
 	</ItemGroup>
 
 	<ItemGroup>
 		<Using Include="Xunit" />
-		<Using Include="FluentAssertions" />
+		<Using Include="AwesomeAssertions" />
 		<Using Include="NSubstitute" />
 	</ItemGroup>
 
