@@ -103,8 +103,8 @@ public static class AuthenticationTelemetry {
 	/// <summary>Metric: total claims transformations, tagged with outcome/scheme/resolver.</summary>
 	public const string TransformationsMetric = "cirreum.authn.transformations";
 
-	/// <summary>Metric: claims transformation duration in milliseconds, tagged with outcome/scheme.</summary>
-	public const string TransformationDurationMetric = "cirreum.authn.transformation.duration";
+	/// <summary>Metric: claims transformation duration in seconds, tagged with outcome/scheme.</summary>
+	public const string TransformationDurationMetric = "cirreum.authn.claims_transformation.duration";
 
 	/// <summary>Metric: total scheme selections, tagged with the resolved scheme and the claiming selector.</summary>
 	public const string SelectionsMetric = "cirreum.authn.selections";
@@ -123,8 +123,10 @@ public static class AuthenticationTelemetry {
 
 	private static readonly Histogram<double> _transformationDuration = _meter.CreateHistogram<double>(
 		TransformationDurationMetric,
-		unit: "ms",
-		description: "Claims transformation duration in milliseconds");
+		unit: CirreumTelemetry.Histograms.DurationUnit,
+		description: "Claims transformation duration",
+		tags: null,
+		advice: CirreumTelemetry.Histograms.DurationAdvice);
 
 	private static readonly Counter<long> _selectionsCounter = _meter.CreateCounter<long>(
 		SelectionsMetric,
@@ -203,7 +205,7 @@ public static class AuthenticationTelemetry {
 
 		// The duration histogram takes the lower-cardinality subset — outcome and scheme.
 		// Buckets multiply per series, so the resolver dimension stays on the counter.
-		_transformationDuration.Record(durationMs, tags);
+		_transformationDuration.Record(durationMs / 1000, tags);
 
 		if (resolver is not null) {
 			tags.Add(ResolverTag, resolver);

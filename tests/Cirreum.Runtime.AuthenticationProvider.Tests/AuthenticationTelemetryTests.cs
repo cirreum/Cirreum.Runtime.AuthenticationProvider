@@ -91,7 +91,7 @@ public class AuthenticationTelemetryTests {
 	public void InstrumentNames_MatchTheRegisteredCrossPackageContract() {
 		// Dot-separated segments; underscores only within a segment; no _total suffix.
 		AuthenticationTelemetry.TransformationsMetric.Should().Be("cirreum.authn.transformations");
-		AuthenticationTelemetry.TransformationDurationMetric.Should().Be("cirreum.authn.transformation.duration");
+		AuthenticationTelemetry.TransformationDurationMetric.Should().Be("cirreum.authn.claims_transformation.duration");
 		AuthenticationTelemetry.SelectionsMetric.Should().Be("cirreum.authn.selections");
 
 		AuthenticationTelemetry.SchemeTag.Should().Be("cirreum.authn.scheme");
@@ -166,12 +166,31 @@ public class AuthenticationTelemetryTests {
 		counter.Tags[AuthenticationTelemetry.ResolverTag].Should().Be("FakeResolver");
 
 		var duration = measurements.Single(m => m.Instrument == AuthenticationTelemetry.TransformationDurationMetric);
-		duration.Value.Should().Be(12.5);
+		duration.Value.Should().Be(0.0125, "durations record seconds; the method takes milliseconds");
 		duration.Tags[AuthenticationTelemetry.OutcomeTag].Should().Be("roles-resolved");
 
 		// Deliberate: buckets multiply per series, so the resolver dimension stays on the
 		// counter and off the histogram.
 		duration.Tags.Should().NotContainKey(AuthenticationTelemetry.ResolverTag);
+	}
+
+	[Fact]
+	public void TransformationDuration_RecordsSecondsWithTheSharedBuckets() {
+		Histogram<double>? histogram = null;
+		using var listener = new MeterListener {
+			InstrumentPublished = (instrument, _) => {
+				if (instrument.Name == AuthenticationTelemetry.TransformationDurationMetric) {
+					histogram = (Histogram<double>)instrument;
+				}
+			}
+		};
+		listener.Start();
+		AuthenticationTelemetry.RecordSchemeSelection("histogram-probe", AuthenticationTelemetry.SelectorNone);
+
+		histogram.Should().NotBeNull();
+		histogram!.Unit.Should().Be("s");
+		histogram.Advice!.HistogramBucketBoundaries
+			.Should().Equal(CirreumTelemetry.Histograms.DurationAdvice.HistogramBucketBoundaries);
 	}
 
 	[Fact]

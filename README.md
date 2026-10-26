@@ -74,7 +74,7 @@ The Authentication track's shared `ActivitySource` and `Meter`, plus the tag-nam
 | Instrument | Kind | Tags |
 |---|---|---|
 | `cirreum.authn.transformations` | Counter | `outcome`, `scheme`, `resolver` |
-| `cirreum.authn.transformation.duration` | Histogram (ms) | `outcome`, `scheme` |
+| `cirreum.authn.claims_transformation.duration` | Histogram (s) | `outcome`, `scheme` |
 | `cirreum.authn.selections` | Counter | `scheme`, `selector` |
 
 `cirreum.authn.selections` is recorded by the umbrella package's forward-scheme resolver via the public `RecordSchemeSelection` — the single site every `ISchemeSelector` is dispatched through, so one call covers the whole registered set. A `selector` value of `none` means nothing claimed the request and the resolver fell through to its default.

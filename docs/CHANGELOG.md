@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The claims-transformation duration histogram records seconds, under a new name:**
+  `cirreum.authn.transformation.duration` (`ms`) is now
+  `cirreum.authn.claims_transformation.duration` (`s`), using the shared unit and bucket boundaries
+  from `CirreumTelemetry.Histograms`. Update dashboards and alerts — a 250 ms threshold is now
+  `0.25`. Every Cirreum duration histogram now records seconds, following the OpenTelemetry
+  semantic conventions and the .NET built-in request-duration histograms; the name changed with
+  the unit so a query on the old name returns nothing rather than values 1000× off.
+  `AuthenticationTelemetry.TransformationDurationMetric` keeps its name; its value changed.
+  `RecordTransformation` still takes milliseconds.
+
 ## [2.1.4] - 2026-10-25
 
 ### Updated
