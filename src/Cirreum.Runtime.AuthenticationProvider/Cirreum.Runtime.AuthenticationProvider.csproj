@@ -8,10 +8,10 @@
 
 	<ItemGroup>
 		<!-- Cirreum.Kernel, Cirreum.Contracts, and Cirreum.Providers flow in transitively. -->
-		<PackageReference Include="Cirreum.AuthenticationProvider" Version="3.2.1" />
+		<PackageReference Include="Cirreum.AuthenticationProvider" Version="3.2.2" />
 
 		<!-- Deferred-logger surface used by the typed RegisterAuthenticationProvider extension. -->
-		<PackageReference Include="Cirreum.Logging.Deferred" Version="1.0.118" />
+		<PackageReference Include="Cirreum.Logging.Deferred" Version="1.0.120" />
 
 		<FrameworkReference Include="Microsoft.AspNetCore.App" />
 	</ItemGroup>
