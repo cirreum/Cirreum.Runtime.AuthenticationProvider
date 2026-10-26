@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Updated
+
+- Re-pinned against the host-invocation wave: **`Cirreum.Domain`** 5.1.1, **`Cirreum.AuthenticationProvider`** 3.2.3, **`Cirreum.Services.Server`** 1.7.0, **`Cirreum.Services.Serverless`** 1.0.65, **`Cirreum.Services.Wasm`** 1.1.11 — where referenced.
+
 ## [2.2.0] - 2026-10-25
 
 ### Changed
